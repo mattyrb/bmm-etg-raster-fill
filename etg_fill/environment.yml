@@ -1,0 +1,20 @@
+name: bmm-etg-raster-fill
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - numpy
+  - scipy
+  - rasterio
+  - geopandas
+  - fiona
+  - shapely
+  - pyproj
+  - scikit-learn
+  - lightgbm
+  - matplotlib
+  - pip:
+    - hf-hydrodata    # optional: programmatic WTD download from HydroFrame
+    - py3dep          # optional: 3DEP 30-m DEM download for prep_statewide.py
+    - tomli           # TOML reader (only needed if Python < 3.11)
