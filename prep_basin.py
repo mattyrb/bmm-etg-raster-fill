@@ -11,13 +11,13 @@ as the key (e.g. "101_SierraValley").
 Usage
 -----
     # Prep a single basin:
-    python etg_fill/prep_basin.py 101_SierraValley
+    python prep_basin.py 101_SierraValley
 
     # Prep all basins that have ETg + treatment data placed in their dirs:
-    python etg_fill/prep_basin.py --all
+    python prep_basin.py --all
 
     # List available basin keys from the NWI shapefile:
-    python etg_fill/prep_basin.py --list
+    python prep_basin.py --list
 
 Outputs
 -------
@@ -53,7 +53,7 @@ except ImportError:
     import tomli as tomllib  # Python < 3.11 fallback
 
 _here = Path(__file__).resolve().parent
-PROJECT_DIR = _here.parent
+PROJECT_DIR = _here
 STATEWIDE_DIR = PROJECT_DIR / "statewide"
 BASINS_DIR = PROJECT_DIR / "basins"
 NWI_SHP = _here / "NWI_Investigations.shp"

@@ -17,13 +17,13 @@ Prerequisites
 Usage
 -----
     # From the project root:
-    python etg_fill/fetch_wtd.py
+    python fetch_wtd.py
 
     # Or with a custom bounding box (lat_min, lon_min, lat_max, lon_max):
-    python etg_fill/fetch_wtd.py --bbox 39.55 -120.30 39.95 -119.90
+    python fetch_wtd.py --bbox 39.55 -120.30 39.95 -119.90
 
     # Save to a custom path:
-    python etg_fill/fetch_wtd.py --output /path/to/wtd.tif
+    python fetch_wtd.py --output /path/to/wtd.tif
 
 The output GeoTIFF is in the native CRS of the Ma 2025 dataset (EPSG:5070,
 NAD83 / Conus Albers).  The ETg baseline-fill workflow reprojects it
@@ -63,7 +63,7 @@ DEFAULT_BBOX = (39.55, -120.30, 39.95, -119.90)
 
 # Default output location (project data directory)
 _here = Path(__file__).resolve().parent
-DEFAULT_OUTPUT = _here.parent / "wtd_Ma2025_SierraValley.tif"
+DEFAULT_OUTPUT = _here / "wtd_Ma2025_SierraValley.tif"
 
 
 def fetch_wtd(

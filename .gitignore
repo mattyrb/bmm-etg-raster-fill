@@ -16,9 +16,11 @@ output/
 *.img
 *.hdf
 *.nc
+*.aux.xml
+*.ovr
 
 # ── Shapefiles ────────────────────────────────────────────────────────────
-# The NWI_Investigations shapefile in etg_fill/ IS tracked (negated below).
+# The NWI_Investigations shapefile at the repo root IS tracked (negated below).
 # Data shapefiles live in the ignored study-area folders above.
 *.shp
 *.shx
@@ -31,13 +33,13 @@ output/
 *.shp.xml
 
 # ── Force-include the NWI shapefile (needed for basin boundary masks) ─────
-!etg_fill/NWI_Investigations.shp
-!etg_fill/NWI_Investigations.shx
-!etg_fill/NWI_Investigations.dbf
-!etg_fill/NWI_Investigations.prj
-!etg_fill/NWI_Investigations.cpg
-!etg_fill/NWI_Investigations.qix
-!etg_fill/NWI_Investigations.shp.xml
+!NWI_Investigations.shp
+!NWI_Investigations.shx
+!NWI_Investigations.dbf
+!NWI_Investigations.prj
+!NWI_Investigations.cpg
+!NWI_Investigations.qix
+!NWI_Investigations.shp.xml
 
 # ── Python ─────────────────────────────────────────────────────────────────
 __pycache__/
@@ -47,6 +49,10 @@ __pycache__/
 *.egg
 dist/
 build/
+.env
+.venv/
+env/
+venv/
 
 # ── OS junk ────────────────────────────────────────────────────────────────
 .DS_Store
@@ -63,3 +69,6 @@ desktop.ini
 # ── Misc ──────────────────────────────────────────────────────────────────
 *.zip
 *.log
+*.csv
+*.xlsx
+*.xml

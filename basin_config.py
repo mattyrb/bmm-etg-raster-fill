@@ -30,7 +30,7 @@ except ImportError:
                  "Install with:  pip install tomli")
 
 _here = Path(__file__).resolve().parent
-PROJECT_DIR = _here.parent
+PROJECT_DIR = _here
 BASINS_DIR = PROJECT_DIR / "basins"
 
 # ── Module-level attributes (populated by load_basin) ──────────────────────

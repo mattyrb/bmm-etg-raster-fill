@@ -153,22 +153,22 @@ project/
         053_PineValley/
             ...
 
-    etg_fill/
-        prep_statewide.py       One-time: clip CONUS rasters to NWI extent
-        prep_basin.py           Per-basin: clip covariates + generate config.toml
-        basin_config.py         TOML config reader (per-basin config interface)
-        config.py               Legacy config (SierraValley / PineValley only)
-        etg_baseline_fill.py    Main workflow (training, prediction, fill, feathering)
-        diagnostics.py          Post-run plots and distribution summaries
-        etunit_summary.py       ET-unit-level summary CSV (area, volume, rates)
-        run_all.py              Orchestrator: batch-process multiple basins
-        fetch_wtd.py            Download Ma et al. (2025) WTD from HydroFrame
-        NWI_Investigations.shp  Basin boundary shapefile (257 investigation areas)
-        environment.yml         Conda environment specification
-        README.md               This file
-        AI_DISCLOSURE.md        AI-assisted development disclosure
-        CHANGELOG.md            Version history
-        LICENSE                 MIT license
+    prep_statewide.py       One-time: clip CONUS rasters to NWI extent
+    prep_basin.py           Per-basin: clip covariates + generate config.toml
+    basin_config.py         TOML config reader (per-basin config interface)
+    config.py               Legacy config (SierraValley / PineValley only)
+    etg_baseline_fill.py    Main workflow (training, prediction, fill, feathering)
+    diagnostics.py          Post-run plots and distribution summaries
+    etunit_summary.py       ET-unit-level summary CSV (area, volume, rates)
+    run_all.py              Orchestrator: batch-process multiple basins
+    fetch_wtd.py            Download Ma et al. (2025) WTD from HydroFrame
+    NWI_Investigations.shp  Basin boundary shapefile (257 investigation areas)
+    environment.yml         Conda environment specification
+    README.md               This file
+    WALKTHROUGH.md          Step-by-step guide for new users
+    AI_DISCLOSURE.md        AI-assisted development disclosure
+    CHANGELOG.md            Version history
+    LICENSE                 MIT license
 ```
 
 
@@ -177,7 +177,7 @@ project/
 ### 1. Install dependencies
 
 ```bash
-conda env create -f etg_fill/environment.yml --solver=classic
+conda env create -f environment.yml --solver=classic
 conda activate bmm-etg-raster-fill
 ```
 
@@ -191,7 +191,7 @@ Clip CONUS-wide DEM, BpS, and WTD rasters to the NWI investigation extent. If yo
 omit `--dem`, the script downloads the USGS 3DEP 30-m DEM via `py3dep`.
 
 ```bash
-python etg_fill/prep_statewide.py \
+python prep_statewide.py \
     --bps  /path/to/LF2020_BPS_CONUS.tif \
     --wtd  /path/to/wtd_conus.tif
 ```
@@ -203,13 +203,13 @@ the `statewide/` directory.
 
 ```bash
 # List all 257 basin keys from the NWI shapefile:
-python etg_fill/prep_basin.py --list
+python prep_basin.py --list
 
 # Prep a single basin (clips covariates + generates default config.toml):
-python etg_fill/prep_basin.py 101_SierraValley
+python prep_basin.py 101_SierraValley
 
 # Prep all basins at once:
-python etg_fill/prep_basin.py --all
+python prep_basin.py --all
 ```
 
 Then place each basin's ETg raster(s) and treatment shapefile into its
@@ -235,18 +235,18 @@ See `config.toml` comments for the full parameter list including CRS overrides.
 
 ```bash
 # Single basin:
-python etg_fill/etg_baseline_fill.py 101_SierraValley
-python etg_fill/diagnostics.py 101_SierraValley
-python etg_fill/etunit_summary.py 101_SierraValley
+python etg_baseline_fill.py 101_SierraValley
+python diagnostics.py 101_SierraValley
+python etunit_summary.py 101_SierraValley
 
 # All configured basins (prep + fill + diagnostics + summary):
-python etg_fill/run_all.py
+python run_all.py
 
 # Dry run -- show what would be processed:
-python etg_fill/run_all.py --dry-run
+python run_all.py --dry-run
 
 # Check readiness of all basins:
-python etg_fill/run_all.py --list
+python run_all.py --list
 ```
 
 ### 6. (Optional) Download WTD data programmatically
@@ -257,13 +257,13 @@ can download the Ma et al. (2025) 30-m CONUS product from HydroFrame:
 ```bash
 # One-time setup: create a free account at https://hydrogen.princeton.edu/
 # then register your API PIN (~48-hour expiry):
-python etg_fill/fetch_wtd.py --register
+python fetch_wtd.py --register
 
 # Download for Sierra Valley (default bounding box):
-python etg_fill/fetch_wtd.py
+python fetch_wtd.py
 
 # Or specify a custom bounding box (lat_min, lon_min, lat_max, lon_max):
-python etg_fill/fetch_wtd.py --bbox 39.55 -120.30 39.95 -119.90 -o wtd_SierraValley.tif
+python fetch_wtd.py --bbox 39.55 -120.30 39.95 -119.90 -o wtd_SierraValley.tif
 ```
 
 

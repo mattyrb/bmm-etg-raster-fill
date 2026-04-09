@@ -14,22 +14,22 @@ For each basin the workflow is:
 Usage
 -----
     # Run everything for all configured basins:
-    python etg_fill/run_all.py
+    python run_all.py
 
     # Run specific basins:
-    python etg_fill/run_all.py 101_SierraValley 053_PineValley
+    python run_all.py 101_SierraValley 053_PineValley
 
     # Prep only (clip covariates + generate configs, no fill):
-    python etg_fill/run_all.py --prep-only
+    python run_all.py --prep-only
 
     # Fill + diagnostics only (skip prep, skip summary):
-    python etg_fill/run_all.py --skip-prep --skip-summary
+    python run_all.py --skip-prep --skip-summary
 
     # Dry run — show what would be processed:
-    python etg_fill/run_all.py --dry-run
+    python run_all.py --dry-run
 
     # List all basins with config.toml:
-    python etg_fill/run_all.py --list
+    python run_all.py --list
 
 License: MIT
 """
@@ -86,7 +86,7 @@ def _basin_ready(basins_dir: Path, key: str) -> tuple[bool, list[str]]:
 
 
 def main():
-    project_dir = _here.parent
+    project_dir = _here
     basins_dir = project_dir / "basins"
 
     parser = argparse.ArgumentParser(
@@ -131,7 +131,7 @@ def main():
 
     if not keys:
         print("No basins to process.")
-        print(f"  Set up basins with: python etg_fill/prep_basin.py --all")
+        print(f"  Set up basins with: python prep_basin.py --all")
         return
 
     # ── Dry run ─────────────────────────────────────────────────────────────

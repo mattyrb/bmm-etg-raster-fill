@@ -10,7 +10,7 @@ Also downloads the 3DEP 30-m DEM via py3dep if no CONUS DEM is provided.
 
 Usage
 -----
-    python etg_fill/prep_statewide.py \
+    python prep_statewide.py \
         --bps  /path/to/LF2020_BPS_CONUS.tif \
         --wtd  /path/to/wtd_conus.tif \
         [--dem /path/to/conus_dem.tif]   # optional; downloads 3DEP if omitted
@@ -38,7 +38,7 @@ except ImportError as e:
 
 
 _here = Path(__file__).resolve().parent
-PROJECT_DIR = _here.parent
+PROJECT_DIR = _here
 STATEWIDE_DIR = PROJECT_DIR / "statewide"
 NWI_SHP = _here / "NWI_Investigations.shp"
 

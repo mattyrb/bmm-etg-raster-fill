@@ -11,7 +11,7 @@ the same for any of the 257 NWI investigation basins.
 Create the conda environment from the repository's environment file and
 activate it:
 
-    conda env create -f etg_fill/environment.yml
+    conda env create -f environment.yml
     conda activate etg_fill
 
 
@@ -21,7 +21,7 @@ Before processing any basin you need Nevada-extent subsets of the three
 covariate rasters. This step clips CONUS-scale rasters to the dissolved
 NWI boundary with a 10 km buffer:
 
-    python etg_fill/prep_statewide.py \
+    python prep_statewide.py \
         --bps /path/to/BpS_CONUS.tif \
         --wtd /path/to/WTD_CONUS.tif \
         --dem /path/to/DEM.tif
@@ -43,7 +43,7 @@ The NWI shapefile contains 257 hydrographic areas. Each has a basin key
 that combines the HA number and name (e.g. `173A_RailroadValleyNorth`).
 List all available keys:
 
-    python etg_fill/prep_basin.py --list
+    python prep_basin.py --list
 
 Find the key that matches your basin and note the exact string.
 
@@ -52,7 +52,7 @@ Find the key that matches your basin and note the exact string.
 
 Run the per-basin prep, substituting your basin key:
 
-    python etg_fill/prep_basin.py 173A_RailroadValleyNorth
+    python prep_basin.py 173A_RailroadValleyNorth
 
 This creates the basin directory structure and clips covariates from the
 statewide subsets:
@@ -113,7 +113,7 @@ Leave `baseline_adjust = 1.0` for your first run.
 
 ## 7. Run the fill
 
-    python etg_fill/etg_baseline_fill.py 173A_RailroadValleyNorth
+    python etg_baseline_fill.py 173A_RailroadValleyNorth
 
 The script logs each step to the console and writes a detailed log file
 to `output/`. A typical run on a medium-sized basin takes 30-120 seconds
@@ -122,8 +122,8 @@ depending on the number of pixels.
 
 ## 8. Run diagnostics and summary
 
-    python etg_fill/diagnostics.py 173A_RailroadValleyNorth
-    python etg_fill/etunit_summary.py 173A_RailroadValleyNorth
+    python diagnostics.py 173A_RailroadValleyNorth
+    python etunit_summary.py 173A_RailroadValleyNorth
 
 All output lands in `basins/173A_RailroadValleyNorth/output/`. Key files
 to review:
@@ -170,7 +170,7 @@ default of 1.0 (no change).
 
 Save the shapefile, then re-run:
 
-    python etg_fill/etg_baseline_fill.py 173A_RailroadValleyNorth
+    python etg_baseline_fill.py 173A_RailroadValleyNorth
 
 
 ### Option B: Adjust the entire basin via config.toml
@@ -186,7 +186,7 @@ Edit `config.toml`:
 This multiplies the modeled baseline by 1.15 for every treatment
 polygon in the basin (a 15% increase). Re-run:
 
-    python etg_fill/etg_baseline_fill.py 173A_RailroadValleyNorth
+    python etg_baseline_fill.py 173A_RailroadValleyNorth
 
 
 ### Combining both approaches
@@ -221,13 +221,13 @@ overrides were used.
 To process several basins in batch, use the orchestrator:
 
     # Run all basins that have a config.toml:
-    python etg_fill/run_all.py
+    python run_all.py
 
     # Preview what would run without executing:
-    python etg_fill/run_all.py --dry-run
+    python run_all.py --dry-run
 
     # Skip diagnostics to speed up a batch:
-    python etg_fill/run_all.py --skip-diag
+    python run_all.py --skip-diag
 
 The orchestrator runs prep (if needed), fill, diagnostics, and summary
 for each basin in sequence. Basins with too few training pixels are

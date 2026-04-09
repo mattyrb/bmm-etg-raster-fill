@@ -28,10 +28,10 @@ Workflow (8 steps)
 Usage
 -----
     cd <project folder>
-    python etg_fill/etg_baseline_fill.py SierraValley
-    python etg_fill/etg_baseline_fill.py PineValley
+    python etg_baseline_fill.py SierraValley
+    python etg_baseline_fill.py PineValley
 
-Configuration lives in etg_fill/config.py.  Study areas are defined there.
+Configuration lives in config.py.  Study areas are defined there.
 
 License: MIT (see LICENSE)
 """
@@ -214,7 +214,7 @@ def _load_cfg(study_area: str):
     - Otherwise fall back to the legacy config.py (SierraValley / PineValley)
     """
     global cfg
-    basins_dir = _here.parent / "basins"
+    basins_dir = _here / "basins"
     toml_path = basins_dir / study_area / "config.toml"
 
     if toml_path.exists():
@@ -239,7 +239,7 @@ def main(study_area: str | None = None) -> None:
             all_areas = sorted(set(_bc.available_areas()) |
                                set(_legacy.available_areas()))
             sys.exit(
-                f"Usage: python etg_fill/etg_baseline_fill.py <study_area>\n"
+                f"Usage: python etg_baseline_fill.py <study_area>\n"
                 f"  Available: {', '.join(all_areas)}"
             )
     _load_cfg(study_area)

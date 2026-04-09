@@ -6,8 +6,8 @@ short name (used on the command line and in output folder/file names) to the
 input file paths and any area-specific overrides for that basin.
 
 The active study area is selected at runtime:
-    python etg_fill/etg_baseline_fill.py SierraValley
-    python etg_fill/etg_baseline_fill.py PineValley
+    python etg_baseline_fill.py SierraValley
+    python etg_baseline_fill.py PineValley
 
 Model parameters, feathering, thresholds, etc. are shared across all areas
 unless overridden per-area.
@@ -16,7 +16,7 @@ unless overridden per-area.
 from pathlib import Path
 
 # ── Project root ────────────────────────────────────────────────────────────
-PROJECT_DIR = Path(__file__).resolve().parent.parent  # one level up from etg_fill/
+PROJECT_DIR = Path(__file__).resolve().parent
 
 # ── Study areas ─────────────────────────────────────────────────────────────
 # Each entry MUST contain at minimum:

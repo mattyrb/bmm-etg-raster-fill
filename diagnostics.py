@@ -17,7 +17,7 @@ Generates diagnostic plots and console distribution summaries:
 
 Usage:
     cd <project folder>
-    python etg_fill/diagnostics.py
+    python diagnostics.py
 
 License: MIT (see LICENSE)
 """
@@ -52,7 +52,7 @@ def _read(path):
 def _load_cfg(study_area: str):
     """Load basin_config (TOML) or legacy config depending on study area."""
     global cfg
-    basins_dir = _here.parent / "basins"
+    basins_dir = _here / "basins"
     toml_path = basins_dir / study_area / "config.toml"
     if toml_path.exists():
         import basin_config as _cfg
@@ -75,7 +75,7 @@ def main(study_area: str | None = None):
             all_areas = sorted(set(_bc.available_areas()) |
                                set(_legacy.available_areas()))
             sys.exit(
-                f"Usage: python etg_fill/diagnostics.py <study_area>\n"
+                f"Usage: python diagnostics.py <study_area>\n"
                 f"  Available: {', '.join(all_areas)}"
             )
     _load_cfg(study_area)
