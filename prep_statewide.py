@@ -52,6 +52,23 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _crs_equal(a, b) -> bool:
+    """
+    Compare two CRS-like objects (rasterio.crs.CRS, pyproj.CRS, EPSG int,
+    WKT string, etc.) for equality.  rasterio.crs.CRS does not expose an
+    ``.equals()`` method, so this helper normalises both sides to
+    ``rasterio.crs.CRS`` and uses ``==``.
+    """
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        ca = rasterio.crs.CRS.from_user_input(a)
+        cb = rasterio.crs.CRS.from_user_input(b)
+        return ca == cb
+    except Exception:
+        return str(a) == str(b)
+
+
 def _clip_raster_to_geometry(
     src_path: Path,
     dst_path: Path,
@@ -73,7 +90,7 @@ def _clip_raster_to_geometry(
     with rasterio.open(src_path) as src:
         # Reproject clip geometry to raster CRS for the mask step
         geom_series = gpd.GeoSeries([clip_geom], crs=clip_crs)
-        if not geom_series.crs.equals(src.crs):
+        if not _crs_equal(geom_series.crs, src.crs):
             geom_series_src = geom_series.to_crs(src.crs)
         else:
             geom_series_src = geom_series
@@ -93,7 +110,7 @@ def _clip_raster_to_geometry(
         need_reproject = False
     else:
         dst_crs = rasterio.crs.CRS.from_user_input(target_crs)
-        if dst_crs.equals(src_crs):
+        if _crs_equal(dst_crs, src_crs):
             need_reproject = False
 
     if not need_reproject:
@@ -196,7 +213,7 @@ def _download_3dep(clip_geom, clip_crs, dst_path: Path, target_crs=None):
         need_reproject = False
     else:
         dst_crs = rasterio.crs.CRS.from_user_input(target_crs)
-        need_reproject = not dst_crs.equals(src_crs)
+        need_reproject = not _crs_equal(dst_crs, src_crs)
 
     if not need_reproject:
         _log(f"    Writing DEM to {dst_path.name} …")
