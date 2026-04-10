@@ -40,7 +40,7 @@ except ImportError as e:
 _here = Path(__file__).resolve().parent
 PROJECT_DIR = _here
 STATEWIDE_DIR = PROJECT_DIR / "statewide"
-NWI_SHP = _here / "NWI_Investigations.shp"
+NWI_SHP = _here / "NWI_Investigations_EPSG_32611.shp"
 
 # Buffer (metres) around the dissolved NWI boundary when clipping.
 # Ensures edge basins have covariate data right up to and slightly beyond
@@ -57,45 +57,112 @@ def _clip_raster_to_geometry(
     dst_path: Path,
     clip_geom,
     clip_crs,
+    target_crs=None,
     resampling=Resampling.bilinear,
     label: str = "",
 ):
     """
-    Clip a raster to a geometry, reprojecting the geometry to match the raster
-    CRS if needed.  Writes a new GeoTIFF with DEFLATE compression.
+    Clip a raster to a geometry and optionally reproject the clipped result
+    into ``target_crs``.  The clip is done in the raster's native CRS to
+    minimise resampling artefacts; the final output is then warped into the
+    target CRS (by default the NWI shapefile CRS).  Writes a GeoTIFF with
+    DEFLATE compression.
     """
     _log(f"  Clipping {label or src_path.name} …")
 
     with rasterio.open(src_path) as src:
-        # Reproject clip geometry to raster CRS if needed
+        # Reproject clip geometry to raster CRS for the mask step
         geom_series = gpd.GeoSeries([clip_geom], crs=clip_crs)
         if not geom_series.crs.equals(src.crs):
-            geom_series = geom_series.to_crs(src.crs)
-        geom = [geom_series.iloc[0].__geo_interface__]
+            geom_series_src = geom_series.to_crs(src.crs)
+        else:
+            geom_series_src = geom_series
+        geom = [geom_series_src.iloc[0].__geo_interface__]
 
-        out_image, out_transform = rio_mask(
+        clipped_image, clipped_transform = rio_mask(
             src, geom, crop=True, all_touched=True, nodata=src.nodata,
         )
-        out_profile = src.profile.copy()
-        out_profile.update(
-            height=out_image.shape[1],
-            width=out_image.shape[2],
-            transform=out_transform,
-            compress="DEFLATE",
-            predictor=2,
+        src_crs = src.crs
+        src_nodata = src.nodata
+        src_dtype = src.dtypes[0]
+        src_count = src.count
+
+    # If no target CRS or it matches the source, write the clipped raster as-is
+    need_reproject = True
+    if target_crs is None:
+        need_reproject = False
+    else:
+        dst_crs = rasterio.crs.CRS.from_user_input(target_crs)
+        if dst_crs.equals(src_crs):
+            need_reproject = False
+
+    if not need_reproject:
+        out_profile = {
+            "driver": "GTiff",
+            "dtype": src_dtype,
+            "count": src_count,
+            "crs": src_crs,
+            "transform": clipped_transform,
+            "width": clipped_image.shape[2],
+            "height": clipped_image.shape[1],
+            "nodata": src_nodata,
+            "compress": "DEFLATE",
+            "predictor": 2,
+        }
+        with rasterio.open(dst_path, "w", **out_profile) as dst:
+            dst.write(clipped_image)
+    else:
+        _log(f"    reprojecting {label or src_path.name} "
+             f"from {src_crs.to_string()} → {dst_crs.to_string()}")
+
+        src_height = clipped_image.shape[1]
+        src_width = clipped_image.shape[2]
+        left, bottom, right, top = rasterio.transform.array_bounds(
+            src_height, src_width, clipped_transform
         )
 
-    with rasterio.open(dst_path, "w", **out_profile) as dst:
-        dst.write(out_image)
+        dst_transform, dst_width, dst_height = calculate_default_transform(
+            src_crs, dst_crs, src_width, src_height,
+            left=left, bottom=bottom, right=right, top=top,
+        )
+
+        out_profile = {
+            "driver": "GTiff",
+            "dtype": src_dtype,
+            "count": src_count,
+            "crs": dst_crs,
+            "transform": dst_transform,
+            "width": dst_width,
+            "height": dst_height,
+            "nodata": src_nodata,
+            "compress": "DEFLATE",
+            "predictor": 2,
+        }
+
+        with rasterio.open(dst_path, "w", **out_profile) as dst:
+            for b in range(1, src_count + 1):
+                reproject(
+                    source=clipped_image[b - 1],
+                    destination=rasterio.band(dst, b),
+                    src_transform=clipped_transform,
+                    src_crs=src_crs,
+                    src_nodata=src_nodata,
+                    dst_transform=dst_transform,
+                    dst_crs=dst_crs,
+                    dst_nodata=src_nodata,
+                    resampling=resampling,
+                )
 
     size_mb = dst_path.stat().st_size / 1e6
     _log(f"    → {dst_path.name}  ({size_mb:.1f} MB)")
 
 
-def _download_3dep(clip_geom, clip_crs, dst_path: Path):
+def _download_3dep(clip_geom, clip_crs, dst_path: Path, target_crs=None):
     """
     Download USGS 3DEP 30-m DEM for the clip geometry using py3dep.
-    Falls back to instructions if py3dep is not available.
+    Falls back to instructions if py3dep is not available.  If ``target_crs``
+    is provided, the DEM is reprojected from EPSG:4326 into that CRS before
+    being written.
     """
     _log("  Downloading 3DEP 30-m DEM via py3dep …")
     try:
@@ -113,31 +180,71 @@ def _download_3dep(clip_geom, clip_crs, dst_path: Path):
     bounds = geom_4326.total_bounds  # (minx, miny, maxx, maxy)
     _log(f"    bbox (EPSG:4326): {bounds}")
 
-    # py3dep.get_dem returns an xarray DataArray
+    # py3dep.get_dem returns an xarray DataArray in EPSG:4326
     dem = py3dep.get_dem(tuple(bounds), resolution=30, crs="EPSG:4326")
 
-    # Write to GeoTIFF
-    _log(f"    Writing DEM to {dst_path.name} …")
-    transform = rasterio.transform.from_bounds(
+    # Build a rasterio-friendly source array + transform in EPSG:4326
+    src_transform = rasterio.transform.from_bounds(
         *bounds, dem.shape[1], dem.shape[0]
     )
-    # Actually use the transform from the xarray attrs if available
-    if hasattr(dem, "rio"):
-        dem.rio.to_raster(dst_path, compress="DEFLATE")
+    src_crs = rasterio.crs.CRS.from_epsg(4326)
+    src_arr = dem.values.astype(np.float32)
+
+    # If we don't need to reproject, write directly
+    if target_crs is None:
+        dst_crs = src_crs
+        need_reproject = False
     else:
+        dst_crs = rasterio.crs.CRS.from_user_input(target_crs)
+        need_reproject = not dst_crs.equals(src_crs)
+
+    if not need_reproject:
+        _log(f"    Writing DEM to {dst_path.name} …")
         profile = {
             "driver": "GTiff",
             "dtype": "float32",
-            "width": dem.shape[1],
-            "height": dem.shape[0],
+            "width": src_arr.shape[1],
+            "height": src_arr.shape[0],
             "count": 1,
-            "crs": "EPSG:4326",
-            "transform": transform,
+            "crs": dst_crs,
+            "transform": src_transform,
             "nodata": np.nan,
             "compress": "DEFLATE",
+            "predictor": 2,
         }
         with rasterio.open(dst_path, "w", **profile) as dst:
-            dst.write(dem.values.astype(np.float32), 1)
+            dst.write(src_arr, 1)
+    else:
+        _log(f"    Reprojecting DEM {src_crs.to_string()} → {dst_crs.to_string()}")
+        dst_transform, dst_width, dst_height = calculate_default_transform(
+            src_crs, dst_crs,
+            src_arr.shape[1], src_arr.shape[0],
+            left=bounds[0], bottom=bounds[1], right=bounds[2], top=bounds[3],
+        )
+        profile = {
+            "driver": "GTiff",
+            "dtype": "float32",
+            "width": dst_width,
+            "height": dst_height,
+            "count": 1,
+            "crs": dst_crs,
+            "transform": dst_transform,
+            "nodata": np.nan,
+            "compress": "DEFLATE",
+            "predictor": 2,
+        }
+        with rasterio.open(dst_path, "w", **profile) as dst:
+            reproject(
+                source=src_arr,
+                destination=rasterio.band(dst, 1),
+                src_transform=src_transform,
+                src_crs=src_crs,
+                src_nodata=np.nan,
+                dst_transform=dst_transform,
+                dst_crs=dst_crs,
+                dst_nodata=np.nan,
+                resampling=Resampling.bilinear,
+            )
 
     size_mb = dst_path.stat().st_size / 1e6
     _log(f"    → {dst_path.name}  ({size_mb:.1f} MB)")
@@ -168,6 +275,7 @@ def main():
 
     gdf = gpd.read_file(NWI_SHP)
     _log(f"  {len(gdf)} basin polygons loaded")
+    _log(f"  NWI shapefile CRS: {gdf.crs.to_string() if gdf.crs else 'UNKNOWN'}")
 
     # Dissolve into a single geometry and buffer
     dissolved = unary_union(gdf.geometry)
@@ -184,6 +292,11 @@ def main():
     clip_geom = dissolved.buffer(args.buffer_m)
     _log(f"  Dissolved + {args.buffer_m:.0f} m buffer ready")
 
+    # All statewide outputs will be reprojected into the NWI shapefile CRS
+    # so downstream per-basin prep can use a single consistent grid.
+    target_crs = gdf.crs
+    _log(f"  Output CRS for statewide rasters: {target_crs.to_string()}")
+
     # ── Clip BpS ────────────────────────────────────────────────────────────
     _log("Clipping BpS …")
     if not args.bps.exists():
@@ -191,6 +304,7 @@ def main():
     _clip_raster_to_geometry(
         args.bps, STATEWIDE_DIR / "BpS_statewide.tif",
         clip_geom, clip_crs,
+        target_crs=target_crs,
         resampling=Resampling.nearest,
         label="BpS",
     )
@@ -202,6 +316,7 @@ def main():
     _clip_raster_to_geometry(
         args.wtd, STATEWIDE_DIR / "WTD_statewide.tif",
         clip_geom, clip_crs,
+        target_crs=target_crs,
         resampling=Resampling.bilinear,
         label="WTD",
     )
@@ -215,11 +330,12 @@ def main():
         _clip_raster_to_geometry(
             args.dem, dem_dst,
             clip_geom, clip_crs,
+            target_crs=target_crs,
             resampling=Resampling.bilinear,
             label="DEM",
         )
     else:
-        _download_3dep(clip_geom, clip_crs, dem_dst)
+        _download_3dep(clip_geom, clip_crs, dem_dst, target_crs=target_crs)
 
     # ── Done ────────────────────────────────────────────────────────────────
     _log(f"\nStatewide rasters written to: {STATEWIDE_DIR.resolve()}")

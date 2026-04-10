@@ -162,7 +162,7 @@ project/
     etunit_summary.py       ET-unit-level summary CSV (area, volume, rates)
     run_all.py              Orchestrator: batch-process multiple basins
     fetch_wtd.py            Download Ma et al. (2025) WTD from HydroFrame
-    NWI_Investigations.shp  Basin boundary shapefile (257 investigation areas)
+    NWI_Investigations_EPSG_32611.shp  Basin boundaries, 257 areas (EPSG:32611 / UTM 11N)
     environment.yml         Conda environment specification
     README.md               This file
     WALKTHROUGH.md          Step-by-step guide for new users

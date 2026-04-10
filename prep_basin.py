@@ -5,7 +5,7 @@ prep_basin.py
 Per-basin setup: clips DEM, BpS, and WTD from statewide subsets to a single
 basin boundary, and generates a default ``config.toml`` if one doesn't exist.
 
-Reads the basin polygon from NWI_Investigations.shp using the ``Basin`` field
+Reads the basin polygon from NWI_Investigations_EPSG_32611.shp using the ``Basin`` field
 as the key (e.g. "101_SierraValley").
 
 Usage
@@ -56,9 +56,9 @@ _here = Path(__file__).resolve().parent
 PROJECT_DIR = _here
 STATEWIDE_DIR = PROJECT_DIR / "statewide"
 BASINS_DIR = PROJECT_DIR / "basins"
-NWI_SHP = _here / "NWI_Investigations.shp"
+NWI_SHP = _here / "NWI_Investigations_EPSG_32611.shp"
 
-# Fields in NWI_Investigations.shp
+# Fields in NWI_Investigations_EPSG_32611.shp
 BASIN_KEY_FIELD = "Basin"
 BASIN_ID_FIELD  = "BasinID"
 BASIN_NAME_FIELD = "BasinName"
@@ -294,7 +294,7 @@ def main():
 
     if args.list:
         keys = sorted(gdf_nwi[BASIN_KEY_FIELD].dropna().unique())
-        print(f"\n{len(keys)} basins in NWI_Investigations.shp:\n")
+        print(f"\n{len(keys)} basins in NWI_Investigations_EPSG_32611.shp:\n")
         for k in keys:
             row = gdf_nwi[gdf_nwi[BASIN_KEY_FIELD] == k].iloc[0]
             print(f"  {k:40s}  ({row[BASIN_NAME_FIELD]})")

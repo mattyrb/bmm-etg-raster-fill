@@ -429,7 +429,7 @@ def main(study_area: str | None = None) -> None:
     # If the NWI shapefile is available, rasterize the basin polygon so
     # training only draws from within-basin pixels.
     basin_mask = None
-    nwi_path = _here / "NWI_Investigations.shp"
+    nwi_path = _here / "NWI_Investigations_EPSG_32611.shp"
     if nwi_path.exists():
         _log("  4b · Rasterizing basin boundary (NWI) for training mask …")
         gdf_nwi = gpd.read_file(nwi_path)
@@ -633,16 +633,31 @@ def main(study_area: str | None = None) -> None:
         adjusted_baseline = baseline * adjust_raster
         # Re-clip negatives introduced by very low adjustment factors
         adjusted_baseline = np.maximum(adjusted_baseline, 0.0)
-        etg_treated[treat_mask] = adjusted_baseline[treat_mask]
         adj_vals = adjust_raster[treat_mask]
-        _log(f"    treatment pixels filled with adjusted baseline: {n_replaced:,}"
-             f"  /  {n_treat_px:,}")
         _log(f"    adjustment factors in treatment zone — "
              f"min: {np.min(adj_vals):.3f}  max: {np.max(adj_vals):.3f}  "
              f"mean: {np.mean(adj_vals):.3f}")
     else:
-        etg_treated[treat_mask] = baseline[treat_mask]
-        adjusted_baseline = baseline  # alias for feathering step
+        adjusted_baseline = baseline.copy()
+
+    # ── Downward-only cap ────────────────────────────────────────────────
+    # The baseline replacement must never INCREASE ETg in a treatment zone
+    # relative to the original input raster.  If the model predicts a
+    # higher rate than the hydrologist's burned-in value, we keep the
+    # original value instead.  This guarantees the workflow only removes
+    # irrigation-inflated signal — it never adds ET.
+    cap_mask = treat_mask & np.isfinite(etg) & (adjusted_baseline > etg)
+    n_capped = int(cap_mask.sum())
+    if n_capped > 0:
+        adjusted_baseline[cap_mask] = etg[cap_mask]
+        _log(f"    downward-only cap applied to {n_capped:,} pixels "
+             f"(baseline exceeded original input ETg)")
+
+    etg_treated[treat_mask] = adjusted_baseline[treat_mask]
+    if adjustment_active:
+        _log(f"    treatment pixels filled with adjusted baseline: {n_replaced:,}"
+             f"  /  {n_treat_px:,}")
+    else:
         _log(f"    treatment pixels filled with baseline: {n_replaced:,}"
              f"  /  {n_treat_px:,}")
 
@@ -677,10 +692,13 @@ def main(study_area: str | None = None) -> None:
         # outside, so for the feather band we blend adjusted baseline with raw.
         etg_final = etg_treated.copy()
         fb = feather_band & np.isfinite(etg_raw) & np.isfinite(adjusted_baseline)
-        etg_final[fb] = (
+        blended = (
             blend_weight[fb] * adjusted_baseline[fb]
             + (1.0 - blend_weight[fb]) * etg_raw[fb]
         )
+        # Downward-only: feathering must never raise ETg above the raw value
+        blended = np.minimum(blended, etg_raw[fb])
+        etg_final[fb] = blended
 
         n_feathered = int(((blend_weight > 0.01) & (blend_weight < 0.99)
                            & outside_zone).sum())

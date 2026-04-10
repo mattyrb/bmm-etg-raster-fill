@@ -20,7 +20,7 @@ output/
 *.ovr
 
 # ── Shapefiles ────────────────────────────────────────────────────────────
-# The NWI_Investigations shapefile at the repo root IS tracked (negated below).
+# The NWI_Investigations_EPSG_32611 shapefile at the repo root IS tracked (negated below).
 # Data shapefiles live in the ignored study-area folders above.
 *.shp
 *.shx
@@ -33,13 +33,13 @@ output/
 *.shp.xml
 
 # ── Force-include the NWI shapefile (needed for basin boundary masks) ─────
-!NWI_Investigations.shp
-!NWI_Investigations.shx
-!NWI_Investigations.dbf
-!NWI_Investigations.prj
-!NWI_Investigations.cpg
-!NWI_Investigations.qix
-!NWI_Investigations.shp.xml
+!NWI_Investigations_EPSG_32611.shp
+!NWI_Investigations_EPSG_32611.shx
+!NWI_Investigations_EPSG_32611.dbf
+!NWI_Investigations_EPSG_32611.prj
+!NWI_Investigations_EPSG_32611.cpg
+!NWI_Investigations_EPSG_32611.qix
+!NWI_Investigations_EPSG_32611.shp.xml
 
 # ── Python ─────────────────────────────────────────────────────────────────
 __pycache__/

@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.1] - 2026-04-10
+
+Downward-only replacement cap and statewide CRS alignment.
+
+### Added
+- Downward-only cap in `etg_baseline_fill.py` Step 7a: the adjusted baseline
+  is clipped per-pixel to the original input ETg, so the fill can only
+  *reduce* ETg in treatment zones, never raise it. A capped-pixel count is
+  written to the run log.
+- Matching cap in Step 7b feathering: blended values outside the treatment
+  boundary are clamped to the raw ETg so feathering cannot introduce upward
+  adjustment either.
+- `prep_statewide.py` now reads the NWI shapefile CRS and reprojects all
+  clipped statewide rasters (DEM, BpS, WTD, 3DEP download) into that CRS.
+  The target CRS and source CRS are logged for each raster.
+
+### Changed
+- Basin boundary shapefile renamed `NWI_Investigations.shp` →
+  `NWI_Investigations_EPSG_32611.shp` (EPSG:32611 / UTM 11N WGS84).
+  References updated in `prep_statewide.py`, `prep_basin.py`,
+  `etg_baseline_fill.py`, `.gitignore`, and `README.md`.
+
 ## [0.4.0] - 2026-04-09
 
 Expert adjustment knob for hydrologist-driven baseline tuning.
@@ -56,7 +78,7 @@ Scaled architecture for statewide multi-basin processing.
 - All three downstream scripts (`etg_baseline_fill.py`, `diagnostics.py`,
   `etunit_summary.py`) now auto-detect TOML-based basin configs vs. legacy
   `config.py` based on whether `basins/{name}/config.toml` exists
-- Basin key derived from `Basin` field in `NWI_Investigations.shp` (e.g.,
+- Basin key derived from `Basin` field in the NWI shapefile (e.g.,
   `101_SierraValley`, `137A_BigSmokyValley`)
 
 ## [0.2.0] - 2026-04-08
