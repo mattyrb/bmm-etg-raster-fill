@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.2] - 2026-04-11
+
+HAND (Height Above Nearest Drainage) covariate.
+
+### Added
+- `prep_statewide.py` now derives a statewide HAND raster from the 3DEP DEM
+  using the standard whitebox-tools pipeline:
+  `BreachDepressionsLeastCost → D8FlowAccumulation → ExtractStreams →
+  ElevationAboveStream`. Outputs `statewide/HAND_statewide.tif` on the same
+  grid and CRS as `DEM_statewide.tif`. Tunable via new CLI flags
+  `--skip-hand`, `--hand-threshold` (stream-extraction flow accumulation
+  threshold in cells; default 1000), `--hand-breach-dist` (max breach
+  distance in cells; default 50, chosen to keep closed Great Basin sub-basins
+  from being bridged through low passes), and `--keep-hand-intermediates`.
+- `prep_basin.py` now clips `HAND_statewide.tif` to each basin into
+  `basins/<key>/input/HAND.tif` alongside DEM/BpS/WTD.
+- `etg_baseline_fill.py` adds HAND as a fourth covariate alongside
+  elevation, slope, and WTD. The training mask, sampler, feature stack, and
+  chunked prediction loop are all refactored to dynamically include or
+  exclude WTD and HAND based on availability.
+- `use_hand` toggle in basin `config.toml` `[model]` section (default `true`),
+  mirroring `use_wtd`. Set to `false` to drop HAND for basins where the
+  derived raster is unreliable.
+- `HAND_TIF` and `USE_HAND` exposed by both `basin_config.py` and legacy
+  `config.py`.
+- `whitebox` added to `environment.yml` (pip section) for HAND derivation.
+
+### Changed
+- Run metadata (`<basin>_run_metadata.txt`) now logs `hand_tif`, `use_wtd`,
+  and `use_hand` alongside the existing inputs/model fields. The `features`
+  list in the `[training]` section reflects the actual covariate stack used
+  (e.g. `['elevation', 'slope', 'wtd', 'hand']`).
+
 ## [0.4.1] - 2026-04-10
 
 Downward-only replacement cap and statewide CRS alignment.

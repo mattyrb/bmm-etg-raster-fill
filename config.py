@@ -71,6 +71,7 @@ ETG_RAW_TIF     = None
 DEM_TIF         = None
 BPS_TIF         = None
 WTD_TIF         = None
+HAND_TIF        = None
 TREATMENT_SHP   = None
 OUT_DIR         = None
 CRS_OVERRIDES   = {}
@@ -111,6 +112,7 @@ def load_study_area(name: str) -> None:
     g["DEM_TIF"]         = _resolve("dem_tif")
     g["BPS_TIF"]         = _resolve("bps_tif")
     g["WTD_TIF"]         = _resolve("wtd_tif")
+    g["HAND_TIF"]        = _resolve("hand_tif")
     g["TREATMENT_SHP"]   = _resolve("treatment_shp")
     g["CRS_OVERRIDES"]   = area.get("crs_overrides", {})
 
@@ -156,6 +158,11 @@ BUFFER_M = 90.0   # metres (set to 0.0 to disable)
 # Include water table depth (WTD) as a covariate?  Set to False to exclude it
 # for basins where the WTD product is unreliable or unavailable.
 USE_WTD = True
+
+# Include Height Above Nearest Drainage (HAND) as a covariate?  HAND is
+# derived from the DEM in prep_statewide.py and captures distance-to-drainage
+# in elevation units.  Set to False for basins where HAND is unreliable.
+USE_HAND = True
 
 # Which model backend to use:  "rf"  (RandomForest)  or  "lgbm"  (LightGBM)
 MODEL_BACKEND = "lgbm"

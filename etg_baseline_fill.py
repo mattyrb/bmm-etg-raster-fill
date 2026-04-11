@@ -419,6 +419,31 @@ def main(study_area: str | None = None) -> None:
     else:
         _log("   WTD raster not configured — skipping")
 
+    # Optional: Height Above Nearest Drainage (HAND) — derived from DEM in
+    # prep_statewide.py via whitebox-tools, encoded in metres above the nearest
+    # downslope stream cell.  Informative for groundwater ET in phreatophyte
+    # / playa-fringe systems where distance-to-drainage matters.
+    hand = None
+    use_hand = getattr(cfg, "USE_HAND", True)
+    if not use_hand:
+        _log("   HAND disabled in config (use_hand = false) — skipping")
+    elif getattr(cfg, "HAND_TIF", None) is not None and cfg.HAND_TIF is not None:
+        _log("   Matching HAND to ETg grid …")
+        hand_candidate = _match_raster(
+            cfg.HAND_TIF, etg_prof, Resampling.bilinear,
+            out_dir / "HAND_matched.tif",
+        )
+        n_hand_valid = int(np.isfinite(hand_candidate).sum())
+        if n_hand_valid > 0:
+            hand = hand_candidate
+            _log(f"    HAND valid pixels: {n_hand_valid:,}  "
+                 f"range: {np.nanmin(hand):.1f} – {np.nanmax(hand):.1f} m")
+        else:
+            _log("  ⚠ HAND raster has 0 valid pixels after reprojection — "
+                 "check extent / nodata / CRS.  Continuing WITHOUT HAND.")
+    else:
+        _log("   HAND raster not configured — skipping")
+
     # ── 4. Derive slope ──────────────────────────────────────────────────────
     _log("4 · Computing slope from DEM …")
     cellsize = abs(etg_prof["transform"].a)
@@ -482,6 +507,8 @@ def main(study_area: str | None = None) -> None:
              f"({n_before_basin - n_after_basin:,} out-of-basin pixels excluded)")
     if wtd is not None:
         valid &= np.isfinite(wtd)
+    if hand is not None:
+        valid &= np.isfinite(hand)
     max_slope = getattr(cfg, "MAX_SLOPE_DEG", None)
     if max_slope is not None:
         n_before_slope = int(valid.sum())
@@ -514,6 +541,7 @@ def main(study_area: str | None = None) -> None:
     elev_flat  = dem.ravel()[idx]
     slope_flat = slope.ravel()[idx]
     wtd_flat   = wtd.ravel()[idx] if wtd is not None else None
+    hand_flat  = hand.ravel()[idx] if hand is not None else None
 
     # ── 5a. Per-BpS-class mean ETg ───────────────────────────────────────────
     _log("   5a · Computing per-BpS mean ETg …")
@@ -528,12 +556,18 @@ def main(study_area: str | None = None) -> None:
     residual_train = y_train - bps_mean_train
 
     # ── 5b. Train residual model on terrain features ───────────────────────
+    # Build the feature stack dynamically.  Elevation + slope are always
+    # included; WTD and HAND are added only if their rasters loaded cleanly
+    # and the user hasn't disabled them in config.
+    feat_columns = [elev_flat, slope_flat]
+    feature_names = ["elevation", "slope"]
     if wtd_flat is not None:
-        X_train = np.column_stack([elev_flat, slope_flat, wtd_flat])
-        feature_names = ["elevation", "slope", "wtd"]
-    else:
-        X_train = np.column_stack([elev_flat, slope_flat])
-        feature_names = ["elevation", "slope"]
+        feat_columns.append(wtd_flat)
+        feature_names.append("wtd")
+    if hand_flat is not None:
+        feat_columns.append(hand_flat)
+        feature_names.append("hand")
+    X_train = np.column_stack(feat_columns)
 
     _log(f"   5b · Training {cfg.MODEL_BACKEND.upper()} on residuals …")
     if cfg.MODEL_BACKEND == "lgbm":
@@ -589,22 +623,25 @@ def main(study_area: str | None = None) -> None:
     pred_mask = np.isfinite(dem) & np.isfinite(slope) & (bps > 0)
     if wtd is not None:
         pred_mask &= np.isfinite(wtd)
+    if hand is not None:
+        pred_mask &= np.isfinite(hand)
     pred_idx = np.where(pred_mask.ravel())[0]
+
+    # Pre-flatten the covariate rasters once to avoid repeated .ravel() copies
+    dem_r   = dem.ravel()
+    slope_r = slope.ravel()
+    wtd_r   = wtd.ravel()  if wtd  is not None else None
+    hand_r  = hand.ravel() if hand is not None else None
 
     CHUNK = 500_000
     for start in range(0, len(pred_idx), CHUNK):
         chunk_idx = pred_idx[start:start + CHUNK]
-        if wtd is not None:
-            X_chunk = np.column_stack([
-                dem.ravel()[chunk_idx],
-                slope.ravel()[chunk_idx],
-                wtd.ravel()[chunk_idx],
-            ])
-        else:
-            X_chunk = np.column_stack([
-                dem.ravel()[chunk_idx],
-                slope.ravel()[chunk_idx],
-            ])
+        cols = [dem_r[chunk_idx], slope_r[chunk_idx]]
+        if wtd_r is not None:
+            cols.append(wtd_r[chunk_idx])
+        if hand_r is not None:
+            cols.append(hand_r[chunk_idx])
+        X_chunk = np.column_stack(cols)
         residual_pred.ravel()[chunk_idx] = model.predict(X_chunk).astype(np.float32)
 
     baseline_raw = bps_mean_full + residual_pred
@@ -779,6 +816,7 @@ def main(study_area: str | None = None) -> None:
         f"dem_tif          = {cfg.DEM_TIF}",
         f"bps_tif          = {cfg.BPS_TIF}",
         f"wtd_tif          = {getattr(cfg, 'WTD_TIF', None)}",
+        f"hand_tif         = {getattr(cfg, 'HAND_TIF', None)}",
         f"treatment_shp    = {cfg.TREATMENT_SHP}",
         "",
         "[grid]",
@@ -796,6 +834,8 @@ def main(study_area: str | None = None) -> None:
         "",
         "[model]",
         f"backend          = {cfg.MODEL_BACKEND}",
+        f"use_wtd          = {getattr(cfg, 'USE_WTD', True)}",
+        f"use_hand         = {getattr(cfg, 'USE_HAND', True)}",
         f"max_slope_deg    = {getattr(cfg, 'MAX_SLOPE_DEG', None)}",
         f"max_train_pixels = {cfg.MAX_TRAIN_PIXELS}",
         f"random_seed      = {cfg.RANDOM_SEED}",

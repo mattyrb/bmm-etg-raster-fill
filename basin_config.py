@@ -44,6 +44,7 @@ ETG_RAW_TIF     = None
 DEM_TIF         = None
 BPS_TIF         = None
 WTD_TIF         = None
+HAND_TIF        = None
 TREATMENT_SHP   = None
 OUT_DIR         = None
 CRS_OVERRIDES   = {}
@@ -60,6 +61,7 @@ ATTR_ADJUST      = "adj_fctr"  # per-polygon override column in shapefile
 
 # Model
 USE_WTD          = True   # include WTD as a covariate (set False to drop it)
+USE_HAND         = True   # include HAND as a covariate (set False to drop it)
 MODEL_BACKEND    = "lgbm"
 MAX_SLOPE_DEG    = 5.0
 MAX_TRAIN_PIXELS = 500_000
@@ -135,6 +137,7 @@ def load_basin_from_toml(toml_path: Path) -> None:
     g["DEM_TIF"]       = _resolve_input("dem_tif", "DEM.tif")
     g["BPS_TIF"]       = _resolve_input("bps_tif", "BpS.tif")
     g["WTD_TIF"]       = _resolve_input("wtd_tif", "WTD.tif")
+    g["HAND_TIF"]      = _resolve_input("hand_tif", "HAND.tif")
     g["TREATMENT_SHP"] = _resolve_input("treatment_shp")
 
     # ── Output directory ────────────────────────────────────────────────────
@@ -155,6 +158,7 @@ def load_basin_from_toml(toml_path: Path) -> None:
     # ── Model parameters ────────────────────────────────────────────────────
     model = raw.get("model", {})
     g["USE_WTD"]          = bool(model.get("use_wtd", True))
+    g["USE_HAND"]         = bool(model.get("use_hand", True))
     g["MODEL_BACKEND"]    = model.get("backend", "lgbm")
     g["MAX_SLOPE_DEG"]    = _float_or_none(model.get("max_slope_deg", 5.0))
     g["MAX_TRAIN_PIXELS"] = _int_or_none(model.get("max_train_pixels", 500_000))

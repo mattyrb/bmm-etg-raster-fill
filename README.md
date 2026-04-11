@@ -144,6 +144,7 @@ project/
         DEM_statewide.tif
         BpS_statewide.tif
         WTD_statewide.tif
+        HAND_statewide.tif      Height Above Nearest Drainage (derived from DEM)
 
     basins/                     Per-basin directories (257 NWI basins)
         101_SierraValley/
@@ -183,12 +184,17 @@ conda activate bmm-etg-raster-fill
 
 If you already have a compatible environment, the key packages are: `numpy`,
 `rasterio`, `geopandas`, `fiona`, `shapely`, `pyproj`, `scipy`, `scikit-learn`,
-`lightgbm`, `matplotlib`, `py3dep`, and `tomli` (Python < 3.11).
+`lightgbm`, `matplotlib`, `py3dep`, `whitebox`, and `tomli` (Python < 3.11).
 
 ### 2. Prepare statewide covariates (one time)
 
 Clip CONUS-wide DEM, BpS, and WTD rasters to the NWI investigation extent. If you
-omit `--dem`, the script downloads the USGS 3DEP 30-m DEM via `py3dep`.
+omit `--dem`, the script downloads the USGS 3DEP 30-m DEM via `py3dep`. The
+script also derives a HAND (Height Above Nearest Drainage) raster from the
+clipped DEM using whitebox-tools (`BreachDepressionsLeastCost →
+D8FlowAccumulation → ExtractStreams → ElevationAboveStream`); pass `--skip-hand`
+to skip this step or `--hand-threshold N` to tune the stream-extraction
+flow-accumulation threshold (default 1000 cells).
 
 ```bash
 python prep_statewide.py \
@@ -196,8 +202,9 @@ python prep_statewide.py \
     --wtd  /path/to/wtd_conus.tif
 ```
 
-This writes `DEM_statewide.tif`, `BpS_statewide.tif`, and `WTD_statewide.tif` to
-the `statewide/` directory.
+This writes `DEM_statewide.tif`, `BpS_statewide.tif`, `WTD_statewide.tif`, and
+`HAND_statewide.tif` to the `statewide/` directory, all reprojected to the NWI
+shapefile CRS (EPSG:32611).
 
 ### 3. Set up basin directories
 
@@ -284,6 +291,8 @@ with the basin key (e.g., `101_SierraValley_ETg_final.tif`).
 | `DEM_matched.tif` | DEM reprojected to ETg grid |
 | `BpS_matched.tif` | BpS reprojected to ETg grid |
 | `slope_matched.tif` | Slope in degrees derived from matched DEM |
+| `WTD_matched.tif` | Water-table depth reprojected to ETg grid (if `use_wtd = true`) |
+| `HAND_matched.tif` | Height Above Nearest Drainage reprojected to ETg grid (if `use_hand = true`) |
 
 ### Tables (CSV)
 
@@ -341,9 +350,11 @@ training, since those values reflect irrigation and cannot be trusted.
 
 The DEM and BpS rasters are reprojected and resampled to exactly match the ETg
 grid. The DEM uses bilinear interpolation (continuous surface), while BpS uses
-nearest-neighbor (categorical data). If configured, the water table depth (WTD)
-raster is also aligned. CRS overrides in `config.toml` handle rasters with
-malformed coordinate systems.
+nearest-neighbor (categorical data). If configured, the water table depth
+(WTD) and Height Above Nearest Drainage (HAND) rasters are also aligned. CRS
+overrides in `config.toml` handle rasters with malformed coordinate systems.
+Either covariate can be disabled per-basin by setting `use_wtd = false` or
+`use_hand = false` in `config.toml [model]`.
 
 ### Step 4: Compute slope and basin boundary mask
 
@@ -355,8 +366,9 @@ rasterized to constrain training data to within-basin pixels only.
 
 Training data consists of all pixels that are: (a) outside treatment zones,
 (b) within the basin boundary, (c) on slopes below the configured threshold,
-and (d) have valid ETg, DEM, slope, and BpS values with ETg > 0. Up to 500,000
-pixels are randomly sampled if the training set is larger.
+and (d) have valid ETg, DEM, slope, BpS, WTD (if enabled), and HAND (if
+enabled) values with ETg > 0. Up to 500,000 pixels are randomly sampled if
+the training set is larger.
 
 If fewer than 50 valid training pixels remain, the basin is gracefully skipped
 with a marker file rather than crashing the batch run.

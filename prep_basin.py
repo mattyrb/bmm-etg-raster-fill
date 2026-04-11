@@ -26,6 +26,7 @@ Outputs
             DEM.tif
             BpS.tif
             WTD.tif
+            HAND.tif
         config.toml   (created only if missing — never overwritten)
 
 License: MIT
@@ -80,6 +81,17 @@ def _load_nwi() -> gpd.GeoDataFrame:
     return gpd.read_file(NWI_SHP)
 
 
+def _crs_equal(a, b) -> bool:
+    """Compare two CRS-like objects (rasterio.crs.CRS lacks ``.equals()``)."""
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        return rasterio.crs.CRS.from_user_input(a) == \
+               rasterio.crs.CRS.from_user_input(b)
+    except Exception:
+        return str(a) == str(b)
+
+
 def _clip_from_statewide(
     src_name: str,
     dst_path: Path,
@@ -98,7 +110,7 @@ def _clip_from_statewide(
     with rasterio.open(src_path) as src:
         # Reproject clip geometry to raster CRS
         geom_series = gpd.GeoSeries([clip_geom], crs=clip_crs)
-        if not geom_series.crs.equals(src.crs):
+        if not _crs_equal(geom_series.crs, src.crs):
             geom_series = geom_series.to_crs(src.crs)
         geom = [geom_series.iloc[0].__geo_interface__]
 
@@ -174,6 +186,7 @@ treatment_shp = "{treat_shp}"
 dem_tif       = "DEM.tif"
 bps_tif       = "BpS.tif"
 wtd_tif       = "WTD.tif"
+hand_tif      = "HAND.tif"
 
 [treatment]
 # Buffer distance (metres) around treatment polygons.
@@ -198,9 +211,13 @@ attr_adjust        = "adj_fctr"
 
 [model]
 # Include water table depth as a covariate? Set to false if the WTD product
-# is unreliable for this basin. When false, the model uses only elevation
-# and slope as terrain features.
+# is unreliable for this basin.
 use_wtd          = true
+# Include Height Above Nearest Drainage as a covariate?  HAND is derived
+# from the 3DEP DEM in prep_statewide.py and captures distance-to-drainage
+# in elevation units, which is informative for groundwater ET in
+# phreatophyte / playa-fringe systems.  Set to false to drop it.
+use_hand         = true
 # "lgbm" (LightGBM, recommended) or "rf" (RandomForest)
 backend          = "lgbm"
 # Exclude training pixels on slopes steeper than this (degrees).
@@ -267,6 +284,10 @@ def prep_one_basin(basin_key: str, gdf_nwi: gpd.GeoDataFrame):
     _clip_from_statewide("WTD_statewide.tif", input_dir / "WTD.tif",
                          clip_geom, clip_crs, Resampling.bilinear)
 
+    _log("  Clipping HAND …")
+    _clip_from_statewide("HAND_statewide.tif", input_dir / "HAND.tif",
+                         clip_geom, clip_crs, Resampling.bilinear)
+
     # ── Generate config.toml ────────────────────────────────────────────────
     _generate_default_config(basin_dir, basin_key, basin_id, basin_name)
 
@@ -305,7 +326,8 @@ def main():
         sys.exit(1)
 
     # Check statewide rasters exist
-    for name in ("DEM_statewide.tif", "BpS_statewide.tif", "WTD_statewide.tif"):
+    for name in ("DEM_statewide.tif", "BpS_statewide.tif",
+                 "WTD_statewide.tif", "HAND_statewide.tif"):
         p = STATEWIDE_DIR / name
         if not p.exists():
             _log(f"WARNING: {p} not found — run prep_statewide.py first")

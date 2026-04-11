@@ -4,9 +4,15 @@ prep_statewide.py
 =================
 One-time script: clip CONUS-wide DEM, BpS, and WTD rasters to the dissolved
 NWI investigation boundary (with buffer) so per-basin prep can use fast
-windowed reads instead of touching the full CONUS files every time.
+windowed reads instead of touching the full CONUS files every time.  All
+outputs are reprojected into the NWI shapefile CRS so downstream prep
+operates on a single consistent grid.
 
-Also downloads the 3DEP 30-m DEM via py3dep if no CONUS DEM is provided.
+Also downloads the 3DEP 30-m DEM via py3dep if no CONUS DEM is provided,
+and derives a Height Above Nearest Drainage (HAND) raster from that DEM
+using whitebox-tools (BreachDepressionsLeastCost → D8FlowAccumulation →
+ExtractStreams → ElevationAboveStream).  This is the same standard pipeline
+used by NASA / NOAA OWP HAND products.
 
 Usage
 -----
@@ -14,6 +20,10 @@ Usage
         --bps  /path/to/LF2020_BPS_CONUS.tif \
         --wtd  /path/to/wtd_conus.tif \
         [--dem /path/to/conus_dem.tif]   # optional; downloads 3DEP if omitted
+
+    # Skip HAND or tune its parameters:
+    python prep_statewide.py --bps ... --wtd ... --skip-hand
+    python prep_statewide.py --bps ... --wtd ... --hand-threshold 500
 
 Outputs are written to  <project>/statewide/
 
@@ -46,6 +56,10 @@ NWI_SHP = _here / "NWI_Investigations_EPSG_32611.shp"
 # Ensures edge basins have covariate data right up to and slightly beyond
 # their boundary so reprojection doesn't produce NaN strips.
 CLIP_BUFFER_M = 10_000  # 10 km
+
+# HAND derivation defaults (whitebox-tools).  See _derive_hand_from_dem().
+HAND_STREAM_THRESHOLD_CELLS = 1_000   # ≈0.9 km² at 30 m
+HAND_BREACH_DIST_CELLS      = 50      # ≈1.5 km — keeps closed basins isolated
 
 
 def _log(msg: str) -> None:
@@ -267,6 +281,155 @@ def _download_3dep(clip_geom, clip_crs, dst_path: Path, target_crs=None):
     _log(f"    → {dst_path.name}  ({size_mb:.1f} MB)")
 
 
+def _derive_hand_from_dem(
+    dem_path: Path,
+    dst_path: Path,
+    threshold_cells: int = HAND_STREAM_THRESHOLD_CELLS,
+    breach_dist_cells: int = HAND_BREACH_DIST_CELLS,
+    keep_intermediates: bool = False,
+):
+    """
+    Derive Height Above Nearest Drainage (HAND) from a DEM using whitebox-tools.
+
+    Pipeline (matches the standard NASA / NOAA OWP HAND workflow):
+        1. Breach depressions (BreachDepressionsLeastCost) — gentle hydrologic
+           enforcement that cuts narrow channels through DEM dams without
+           wholesale filling closed basins.
+        2. D8 flow accumulation on the breached DEM.
+        3. Extract a stream network at ``threshold_cells`` cells of upstream
+           drainage area.
+        4. ElevationAboveStream — for every cell, height in metres above the
+           nearest downslope stream cell along the D8 flow path.
+
+    The result is HAND in metres on the same grid / CRS as ``dem_path``.
+
+    Parameters
+    ----------
+    dem_path : Path
+        Source DEM (clipped + reprojected statewide DEM).
+    dst_path : Path
+        Output HAND GeoTIFF.
+    threshold_cells : int
+        Stream initiation threshold in cells.  Larger = sparser stream network
+        → larger HAND values.  Default 1000 (~0.9 km² at 30 m).
+    breach_dist_cells : int
+        Maximum breach search distance in cells.  Keep small in closed-basin
+        country so the routine doesn't bridge adjacent valleys through low
+        passes.  Default 50 (~1.5 km at 30 m).
+    keep_intermediates : bool
+        If True, leave the breached DEM, flow accumulation, and stream rasters
+        in the working directory for inspection.  Default False.
+    """
+    try:
+        import whitebox
+    except ImportError:
+        sys.exit(
+            "whitebox is not installed.  Install with:\n"
+            "  pip install whitebox\n"
+            "Required for deriving HAND from the statewide DEM."
+        )
+
+    import shutil
+
+    if not dem_path.exists():
+        sys.exit(f"ERROR: DEM not found for HAND derivation: {dem_path}")
+
+    _log(f"  Deriving HAND from {dem_path.name} "
+         f"(stream threshold = {threshold_cells} cells, "
+         f"breach dist = {breach_dist_cells} cells) …")
+
+    # whitebox prefers a single working directory and operates on filenames
+    work_dir = dst_path.parent / "_hand_work"
+    work_dir.mkdir(exist_ok=True)
+
+    wbt = whitebox.WhiteboxTools()
+    wbt.set_verbose_mode(False)
+    wbt.set_working_dir(str(work_dir.resolve()))
+
+    # Stage the DEM into the working directory
+    dem_local = work_dir / "dem_in.tif"
+    shutil.copy(dem_path, dem_local)
+
+    breached_name = "dem_breached.tif"
+    flow_acc_name = "flow_accum.tif"
+    streams_name  = "streams.tif"
+    hand_name     = "hand_out.tif"
+
+    _log("    1/4  BreachDepressionsLeastCost …")
+    rc = wbt.breach_depressions_least_cost(
+        dem=dem_local.name,
+        output=breached_name,
+        dist=breach_dist_cells,
+    )
+    if rc != 0:
+        sys.exit("ERROR: whitebox breach_depressions_least_cost failed")
+
+    _log("    2/4  D8FlowAccumulation …")
+    rc = wbt.d8_flow_accumulation(
+        i=breached_name,
+        output=flow_acc_name,
+        out_type="cells",
+    )
+    if rc != 0:
+        sys.exit("ERROR: whitebox d8_flow_accumulation failed")
+
+    _log(f"    3/4  ExtractStreams (threshold = {threshold_cells} cells) …")
+    rc = wbt.extract_streams(
+        flow_accum=flow_acc_name,
+        output=streams_name,
+        threshold=threshold_cells,
+    )
+    if rc != 0:
+        sys.exit("ERROR: whitebox extract_streams failed")
+
+    _log("    4/4  ElevationAboveStream (HAND) …")
+    rc = wbt.elevation_above_stream(
+        dem=breached_name,
+        streams=streams_name,
+        output=hand_name,
+    )
+    if rc != 0:
+        sys.exit("ERROR: whitebox elevation_above_stream failed")
+
+    hand_temp = work_dir / hand_name
+    if not hand_temp.exists():
+        sys.exit(f"ERROR: HAND output not produced by whitebox: {hand_temp}")
+
+    # Move final HAND raster to its destination
+    if dst_path.exists():
+        dst_path.unlink()
+    shutil.move(str(hand_temp), str(dst_path))
+
+    # Clean up intermediates unless asked to keep them
+    if not keep_intermediates:
+        for fname in (breached_name, flow_acc_name, streams_name,
+                      dem_local.name):
+            fp = work_dir / fname
+            if fp.exists():
+                try:
+                    fp.unlink()
+                except OSError:
+                    pass
+        try:
+            work_dir.rmdir()
+        except OSError:
+            pass  # leave non-empty work dir alone
+
+    size_mb = dst_path.stat().st_size / 1e6
+    _log(f"    → {dst_path.name}  ({size_mb:.1f} MB)")
+
+    # Quick sanity check: report HAND value range
+    try:
+        with rasterio.open(dst_path) as ds:
+            arr = ds.read(1, masked=True)
+            if arr.count() > 0:
+                _log(f"    HAND range (m): "
+                     f"{float(arr.min()):.1f} – {float(arr.max()):.1f}  "
+                     f"(median {float(np.ma.median(arr)):.1f})")
+    except Exception as e:
+        _log(f"    (could not summarise HAND raster: {e})")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Clip CONUS rasters to NWI investigation extent."
@@ -280,6 +443,21 @@ def main():
                              "3DEP 30m if omitted)")
     parser.add_argument("--buffer-m", type=float, default=CLIP_BUFFER_M,
                         help=f"Buffer around NWI boundary (default: {CLIP_BUFFER_M} m)")
+    parser.add_argument("--skip-hand", action="store_true",
+                        help="Skip the HAND derivation step (whitebox-tools)")
+    parser.add_argument("--hand-threshold", type=int,
+                        default=HAND_STREAM_THRESHOLD_CELLS,
+                        help=f"Stream initiation threshold in cells for HAND "
+                             f"derivation (default: {HAND_STREAM_THRESHOLD_CELLS} "
+                             f"cells ≈ 0.9 km² at 30 m)")
+    parser.add_argument("--hand-breach-dist", type=int,
+                        default=HAND_BREACH_DIST_CELLS,
+                        help=f"Max breach search distance in cells for "
+                             f"BreachDepressionsLeastCost (default: "
+                             f"{HAND_BREACH_DIST_CELLS} cells)")
+    parser.add_argument("--keep-hand-intermediates", action="store_true",
+                        help="Keep breached DEM, flow accumulation, and "
+                             "streams rasters from HAND derivation")
     args = parser.parse_args()
 
     t0 = time.time()
@@ -354,11 +532,27 @@ def main():
     else:
         _download_3dep(clip_geom, clip_crs, dem_dst, target_crs=target_crs)
 
+    # ── Derive HAND from the statewide DEM ──────────────────────────────────
+    hand_dst = STATEWIDE_DIR / "HAND_statewide.tif"
+    if args.skip_hand:
+        _log("Skipping HAND derivation (--skip-hand)")
+    else:
+        _log("Deriving HAND from DEM …")
+        _derive_hand_from_dem(
+            dem_path=dem_dst,
+            dst_path=hand_dst,
+            threshold_cells=args.hand_threshold,
+            breach_dist_cells=args.hand_breach_dist,
+            keep_intermediates=args.keep_hand_intermediates,
+        )
+
     # ── Done ────────────────────────────────────────────────────────────────
     _log(f"\nStatewide rasters written to: {STATEWIDE_DIR.resolve()}")
     _log(f"  DEM_statewide.tif")
     _log(f"  BpS_statewide.tif")
     _log(f"  WTD_statewide.tif")
+    if not args.skip_hand:
+        _log(f"  HAND_statewide.tif")
     _log(f"Elapsed: {time.time() - t0:.1f} s")
 
 

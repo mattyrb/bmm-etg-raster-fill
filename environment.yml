@@ -17,4 +17,5 @@ dependencies:
   - pip:
     - hf-hydrodata    # optional: programmatic WTD download from HydroFrame
     - py3dep          # optional: 3DEP 30-m DEM download for prep_statewide.py
+    - whitebox        # HAND derivation in prep_statewide.py (whitebox-tools)
     - tomli           # TOML reader (only needed if Python < 3.11)
