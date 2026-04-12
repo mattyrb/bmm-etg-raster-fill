@@ -338,62 +338,105 @@ def _derive_hand_from_dem(
          f"(stream threshold = {threshold_cells} cells, "
          f"breach dist = {breach_dist_cells} cells) …")
 
-    # whitebox prefers a single working directory and operates on filenames
-    work_dir = dst_path.parent / "_hand_work"
+    # Use a dedicated work directory with absolute paths everywhere.  Some
+    # whitebox versions on Windows ignore set_working_dir for certain tools,
+    # so we avoid relying on it.
+    work_dir = (dst_path.parent / "_hand_work").resolve()
     work_dir.mkdir(exist_ok=True)
 
     wbt = whitebox.WhiteboxTools()
-    wbt.set_verbose_mode(False)
-    wbt.set_working_dir(str(work_dir.resolve()))
+    # Verbose mode forwards the tool binary's stdout to our log — without it a
+    # silent whitebox failure (non-zero exit inside the binary but rc still 0
+    # from the Python wrapper) gives us no clues.
+    wbt.set_verbose_mode(True)
+    wbt.set_working_dir(str(work_dir))
 
-    # Stage the DEM into the working directory
-    dem_local = work_dir / "dem_in.tif"
+    # Whitebox's stdout contains both progress ticks and any error messages.
+    # We capture it so we can surface the real failure reason if a tool fails
+    # or produces no output file.
+    wbt_buf: list[str] = []
+
+    def _wbt_cb(msg: str):
+        line = msg.strip()
+        if not line:
+            return
+        wbt_buf.append(line)
+        # Whitebox emits many "*" progress ticks — skip those from the log.
+        if line in ("*", "0%", "100%") or line.endswith("%"):
+            return
+        _log(f"      [wbt] {line}")
+
+    def _run_tool(label: str, func, **kwargs) -> int:
+        _log(f"    {label} …")
+        wbt_buf.clear()
+        try:
+            rc_local = func(callback=_wbt_cb, **kwargs)
+        except Exception as exc:
+            sys.exit(f"ERROR: whitebox {label} raised: {exc}")
+        if rc_local not in (0, None):
+            tail = "\n".join(wbt_buf[-10:])
+            sys.exit(
+                f"ERROR: whitebox {label} failed (rc={rc_local}).\n"
+                f"Last whitebox output:\n{tail}"
+            )
+        return rc_local if rc_local is not None else 0
+
+    # Stage the DEM into the working directory as an absolute path.
+    dem_local   = (work_dir / "dem_in.tif").resolve()
+    breached    = (work_dir / "dem_breached.tif").resolve()
+    flow_accum  = (work_dir / "flow_accum.tif").resolve()
+    streams     = (work_dir / "streams.tif").resolve()
+    hand_temp   = (work_dir / "hand_out.tif").resolve()
+
     shutil.copy(dem_path, dem_local)
 
-    breached_name = "dem_breached.tif"
-    flow_acc_name = "flow_accum.tif"
-    streams_name  = "streams.tif"
-    hand_name     = "hand_out.tif"
-
-    _log("    1/4  BreachDepressionsLeastCost …")
-    rc = wbt.breach_depressions_least_cost(
-        dem=dem_local.name,
-        output=breached_name,
+    _run_tool(
+        "1/4  BreachDepressionsLeastCost",
+        wbt.breach_depressions_least_cost,
+        dem=str(dem_local),
+        output=str(breached),
         dist=breach_dist_cells,
     )
-    if rc != 0:
-        sys.exit("ERROR: whitebox breach_depressions_least_cost failed")
 
-    _log("    2/4  D8FlowAccumulation …")
-    rc = wbt.d8_flow_accumulation(
-        i=breached_name,
-        output=flow_acc_name,
+    _run_tool(
+        "2/4  D8FlowAccumulation",
+        wbt.d8_flow_accumulation,
+        i=str(breached),
+        output=str(flow_accum),
         out_type="cells",
     )
-    if rc != 0:
-        sys.exit("ERROR: whitebox d8_flow_accumulation failed")
 
-    _log(f"    3/4  ExtractStreams (threshold = {threshold_cells} cells) …")
-    rc = wbt.extract_streams(
-        flow_accum=flow_acc_name,
-        output=streams_name,
+    _run_tool(
+        f"3/4  ExtractStreams (threshold = {threshold_cells} cells)",
+        wbt.extract_streams,
+        flow_accum=str(flow_accum),
+        output=str(streams),
         threshold=threshold_cells,
     )
-    if rc != 0:
-        sys.exit("ERROR: whitebox extract_streams failed")
 
-    _log("    4/4  ElevationAboveStream (HAND) …")
-    rc = wbt.elevation_above_stream(
-        dem=breached_name,
-        streams=streams_name,
-        output=hand_name,
+    _run_tool(
+        "4/4  ElevationAboveStream (HAND)",
+        wbt.elevation_above_stream,
+        dem=str(breached),
+        streams=str(streams),
+        output=str(hand_temp),
     )
-    if rc != 0:
-        sys.exit("ERROR: whitebox elevation_above_stream failed")
 
-    hand_temp = work_dir / hand_name
     if not hand_temp.exists():
-        sys.exit(f"ERROR: HAND output not produced by whitebox: {hand_temp}")
+        # Something went wrong silently.  Dump what's in the work directory
+        # plus the tail of whitebox output so the user can see what happened.
+        _log(f"  Contents of {work_dir}:")
+        try:
+            for p in sorted(work_dir.iterdir()):
+                sz = p.stat().st_size / 1e6
+                _log(f"    {p.name:<32s} {sz:8.1f} MB")
+        except OSError as exc:
+            _log(f"    (failed to list work dir: {exc})")
+        tail = "\n".join(wbt_buf[-20:]) if wbt_buf else "(no whitebox output captured)"
+        sys.exit(
+            f"ERROR: HAND output not produced by whitebox: {hand_temp}\n"
+            f"Last whitebox output:\n{tail}"
+        )
 
     # Move final HAND raster to its destination
     if dst_path.exists():
@@ -402,9 +445,7 @@ def _derive_hand_from_dem(
 
     # Clean up intermediates unless asked to keep them
     if not keep_intermediates:
-        for fname in (breached_name, flow_acc_name, streams_name,
-                      dem_local.name):
-            fp = work_dir / fname
+        for fp in (breached, flow_accum, streams, dem_local):
             if fp.exists():
                 try:
                     fp.unlink()
