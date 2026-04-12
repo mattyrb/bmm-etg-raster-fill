@@ -188,9 +188,9 @@ def _generate_default_config(basin_dir: Path, basin_key: str,
     treat_shp = treatment_shps[0].name if treatment_shps else "# PLACE TREATMENT SHP HERE"
 
     toml_content = f"""\
-# ETg Baseline Fill — Basin Configuration
+# ETg Baseline Fill -- Basin Configuration
 # Basin: {basin_key}
-# Generated automatically.  Edit freely — this file is never overwritten.
+# Generated automatically.  Edit freely -- this file is never overwritten.
 
 [basin]
 basin_key  = "{basin_key}"
@@ -222,7 +222,7 @@ attr_scale       = "scale_fctr"
 attr_replace     = "rplc_rt"
 
 [adjustment]
-# Expert adjustment knob — scale the modeled baseline up or down.
+# Expert adjustment knob -- scale the modeled baseline up or down.
 # 1.0 = no change, 0.8 = reduce baseline 20%, 1.2 = increase 20%.
 # This is a basin-wide default; individual polygons can override it
 # via the "adj_fctr" column in the treatment shapefile.
@@ -257,7 +257,7 @@ random_seed      = 42
 # "WTD" = "+proj=lcc +lat_1=30 +lat_2=60 +lon_0=-97.0 +lat_0=40.0 +a=6370000.0 +b=6370000.0 +units=m +no_defs"
 """
 
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         f.write(toml_content)
     _log(f"  → config.toml generated (review & edit before running fill)")
 

@@ -111,8 +111,17 @@ def load_basin_from_toml(toml_path: Path) -> None:
     basin_dir = toml_path.parent
     input_dir = basin_dir / "input"
 
-    with open(toml_path, "rb") as f:
-        raw = tomllib.load(f)
+    # tomllib requires UTF-8 (per the TOML spec).  However, config files
+    # generated on Windows before the encoding fix may be in cp1252 / latin-1.
+    # If the straight read fails we re-encode the file to UTF-8 and retry.
+    try:
+        with open(toml_path, "rb") as f:
+            raw = tomllib.load(f)
+    except UnicodeDecodeError:
+        text = toml_path.read_text(encoding="cp1252")
+        toml_path.write_text(text, encoding="utf-8")
+        with open(toml_path, "rb") as f:
+            raw = tomllib.load(f)
 
     g = globals()
 
