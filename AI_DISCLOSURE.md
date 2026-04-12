@@ -34,6 +34,12 @@ established in prior peer-reviewed work by DRI staff (see README.md, References)
   boundaries, directory structure)
 - Specified the expert adjustment knob design (basin-wide default + per-polygon
   override via shapefile column) so hydrologists can tune results
+- Decided to add HAND (Height Above Nearest Drainage) as a terrain covariate
+  and directed the move from statewide to per-basin derivation after identifying
+  the memory limitation
+- Requested early stopping on LightGBM to prevent over-training on small basins
+- Identified and reported each stage of the HAND derivation debugging cycle
+  (memory failure, nodata barriers, algorithm speed, parameter naming)
 
 **AI (Claude, Anthropic):**
 - Implemented the Python workflow based on human-specified requirements
@@ -47,6 +53,12 @@ established in prior peer-reviewed work by DRI staff (see README.md, References)
   basin-wide default + per-polygon shapefile overrides, applied before feathering
 - Implemented basin boundary mask for training data
 - Added per-basin logging, graceful skip, and cross-basin summary
+- Integrated HAND covariate: whitebox-tools pipeline with elevation-wall fill
+  for clipped DEMs, per-basin derivation, dynamic feature stacking
+- Implemented LightGBM early stopping with validation hold-out and refit
+- Implemented automatic BpS-mean-only fallback when CV R-squared is negative
+- Debugged whitebox-tools integration across five iterations (memory, nodata
+  barriers, algorithm selection, parameter naming, file-existence checks)
 - Wrote diagnostic plotting and summary statistics code
 - Debugged CRS handling issues, array broadcasting errors, and matplotlib API
   changes
@@ -68,8 +80,8 @@ Key scientific and architectural judgments made by the human researcher include:
   from the modified raster
 - The decision to simplify from a dual scale/replace treatment system to full
   baseline replacement for all treatment polygons
-- The decision that feathering should blend outside the treatment boundary rather
-  than inside it
+- The decision that feathering should blend outside the treatment boundary
+  rather than inside it
 - The requirement to constrain training data to within-basin pixels using the NWI
   investigation boundary
 - The design of the statewide scaling approach: NWI-based basin boundaries

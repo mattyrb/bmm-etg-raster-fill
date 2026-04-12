@@ -2,6 +2,50 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.5.0] - 2026-04-12
+
+Early stopping and automatic BpS-mean fallback.
+
+### Added
+- LightGBM early stopping: when the training set has at least 200 pixels,
+  a 20% validation split is held out and LightGBM stops adding trees once
+  validation loss fails to improve for 20 rounds.  The model is then
+  refitted on the full training set with the optimal tree count so no
+  data is wasted.  The log reports trees used vs. configured maximum.
+- Automatic BpS-mean-only fallback: if 3-fold cross-validation R² is
+  negative (meaning the residual model is making predictions worse, not
+  better), the residual is zeroed out and the baseline becomes the
+  per-BpS class mean only.  A warning is logged and the run metadata
+  records `use_residual_model = no`.
+- Run metadata now logs `lgbm_trees_used`, `early_stopping`, and
+  `use_residual_model` in the `[model]` section.
+
+### Fixed
+- HAND derivation: clipped DEMs now have nodata pixels filled with an
+  elevation wall (max elevation + 1000 m) before whitebox processing,
+  so D8 flow routes inward toward the valley floor rather than dying at
+  the polygon boundary.  The wall is masked back to NaN after HAND is
+  computed.
+- Switched whitebox pipeline from `BreachDepressionsLeastCost` to
+  `FillDepressions` with `fix_flats=True`.  The breach algorithm spent
+  hours searching for least-cost paths through the elevation wall;
+  `FillDepressions` completes in seconds with equivalent results for
+  HAND derivation.
+- Added file-existence checks between each whitebox pipeline step so a
+  failed step stops the chain immediately instead of cascading.
+- TOML template in `prep_basin.py` now writes with explicit
+  `encoding="utf-8"` and uses ASCII-only characters in comments, fixing
+  a `UnicodeDecodeError` on Windows where `tomllib` expected UTF-8 but
+  the file was written in cp1252.
+- `basin_config.py` now auto-repairs existing cp1252-encoded config files
+  by re-encoding them to UTF-8 on first load.
+- HAND diagnostic block added to `etg_baseline_fill.py`: if HAND has 0
+  valid pixels after reprojection, the source raster's bounds, CRS,
+  nodata value, shape, dtype, and finite pixel count are logged.
+- LGBMRegressor feature-names warning eliminated by wrapping both
+  training and prediction arrays in `pd.DataFrame` with consistent
+  column names.
+
 ## [0.4.3] - 2026-04-11
 
 Move HAND derivation from statewide to per-basin.

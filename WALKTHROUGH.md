@@ -34,7 +34,8 @@ This produces three files in `statewide/`:
         WTD_statewide.tif
 
 You only run this once. Every per-basin prep clips from these statewide
-subsets rather than going back to the CONUS files.
+subsets rather than going back to the CONUS files. (HAND is derived
+per-basin from the clipped DEM during step 4, not at the statewide level.)
 
 
 ## 3. Find your basin key
@@ -54,16 +55,27 @@ Run the per-basin prep, substituting your basin key:
 
     python prep_basin.py 173A_RailroadValleyNorth
 
-This creates the basin directory structure and clips covariates from the
-statewide subsets:
+This creates the basin directory structure, clips covariates from the
+statewide subsets, and derives HAND from the basin's clipped DEM:
 
     basins/173A_RailroadValleyNorth/
         input/
             DEM.tif
             BpS.tif
             WTD.tif
+            HAND.tif
         output/
         config.toml
+
+HAND derivation uses whitebox-tools (FillDepressions, D8 flow
+accumulation, stream extraction, ElevationAboveStream) and typically
+takes 10-30 seconds per basin. If HAND derivation fails for a basin in
+a batch run, the basin continues without HAND rather than aborting.
+
+Optional flags for HAND control:
+
+    python prep_basin.py 173A_RailroadValleyNorth --skip-hand
+    python prep_basin.py 173A_RailroadValleyNorth --hand-threshold 500
 
 
 ## 5. Place your data files
@@ -75,6 +87,7 @@ Copy your ETg raster and treatment shapefile (including all sidecar files:
         DEM.tif              (from prep)
         BpS.tif              (from prep)
         WTD.tif              (from prep)
+        HAND.tif             (from prep -- derived per-basin)
         your_ETg_raster.tif  (you provide this)
         your_treatment.shp   (you provide this)
         your_treatment.shx
@@ -105,6 +118,7 @@ may want to review:
 
     [model]
     use_wtd          = true        # set false if WTD product is unreliable here
+    use_hand         = true        # set false if HAND derivation was unreliable
     backend          = "lgbm"      # "lgbm" or "rf"
     max_slope_deg    = 5.0         # exclude steep pixels from training
 
@@ -118,6 +132,19 @@ Leave `baseline_adjust = 1.0` for your first run.
 The script logs each step to the console and writes a detailed log file
 to `output/`. A typical run on a medium-sized basin takes 30-120 seconds
 depending on the number of pixels.
+
+When running LightGBM with at least 200 training pixels, the model uses
+early stopping: a 20% validation hold-out monitors loss and stops
+adding trees once performance plateaus (20 rounds with no improvement).
+The model is then refitted on the full training set using the optimal
+tree count, so no data is wasted. The log reports how many trees were
+used versus the configured maximum.
+
+If 3-fold cross-validation R-squared is negative (meaning the terrain
+residual model is making predictions worse, not better), the residual
+is automatically zeroed out and the baseline falls back to per-BpS
+class means only. A warning is logged and the run metadata records
+`use_residual_model = no`.
 
 
 ## 8. Run diagnostics and summary

@@ -616,18 +616,58 @@ def main(study_area: str | None = None) -> None:
             random_state=cfg.RANDOM_SEED,
         )
 
-    model.fit(X_train, residual_train)
+    # ── Early stopping (LightGBM only) ────────────────────────────────────
+    # Hold out 20% for early-stopping validation so the model stops adding
+    # trees once the validation loss plateaus.  This prevents over-training
+    # on small basins where the terrain signal is weak.
+    from sklearn.model_selection import train_test_split
+    n_trees_used = None     # will be set to actual trees after early stopping
+    if cfg.MODEL_BACKEND == "lgbm" and len(X_train) >= 200:
+        X_fit, X_val, y_fit, y_val = train_test_split(
+            X_train, residual_train,
+            test_size=0.2, random_state=cfg.RANDOM_SEED,
+        )
+        _log(f"    early-stopping split: {len(X_fit):,} train / "
+             f"{len(X_val):,} validation")
+        model.fit(
+            X_fit, y_fit,
+            eval_set=[(X_val, y_val)],
+            callbacks=[
+                lgb.early_stopping(stopping_rounds=20, verbose=False),
+                lgb.log_evaluation(period=0),   # suppress per-round logging
+            ],
+        )
+        n_trees_used = model.best_iteration_ if model.best_iteration_ > 0 \
+            else model.n_estimators
+        _log(f"    early stopping: {n_trees_used} / "
+             f"{cfg.LGBM_N_ESTIMATORS} trees used")
+        # Refit on the FULL training set with the optimal number of trees
+        # so that no data is wasted for the final predictions.
+        model.set_params(n_estimators=n_trees_used)
+        model.fit(X_train, residual_train)
+    else:
+        model.fit(X_train, residual_train)
 
     _log("    cross-validating (3-fold) …")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         cv = cross_val_score(model, X_train, residual_train, cv=3,
                              scoring="r2", n_jobs=cfg.RF_N_JOBS)
-    _log(f"    residual-model CV R²: {cv.mean():.4f} ± {cv.std():.4f}")
+    cv_mean = cv.mean()
+    _log(f"    residual-model CV R²: {cv_mean:.4f} ± {cv.std():.4f}")
 
     imp = model.feature_importances_
     for name, val in zip(feature_names, imp):
         _log(f"      {name:>12s}  importance = {val:.4f}")
+
+    # ── Fallback decision: skip residual model if it hurts ─────────────────
+    # A negative CV R² means the residual predictions make the baseline
+    # WORSE than the BpS class means alone.  In that case we zero out
+    # the residual so the final baseline is just the per-BpS mean.
+    use_residual = cv_mean >= 0.0
+    if not use_residual:
+        _log(f"    ⚠ CV R² is negative ({cv_mean:.4f}) — the residual model "
+             f"is hurting predictions.  Falling back to BpS-mean-only baseline.")
 
     # ── 6. Predict baseline ETg (for replacement zones) ──────────────────────
     _log("6 · Predicting baseline ETg …")
@@ -640,31 +680,35 @@ def main(study_area: str | None = None) -> None:
     unseen = ~np.isin(bps, list(bps_mean_map.keys())) & (bps > 0)
     bps_mean_full[unseen] = global_mean
 
-    # Predict residual in chunks
+    # Predict residual in chunks (or skip if residual model hurts)
     residual_pred = np.full_like(etg, np.nan)
-    pred_mask = np.isfinite(dem) & np.isfinite(slope) & (bps > 0)
-    if wtd is not None:
-        pred_mask &= np.isfinite(wtd)
-    if hand is not None:
-        pred_mask &= np.isfinite(hand)
-    pred_idx = np.where(pred_mask.ravel())[0]
+    if use_residual:
+        pred_mask = np.isfinite(dem) & np.isfinite(slope) & (bps > 0)
+        if wtd is not None:
+            pred_mask &= np.isfinite(wtd)
+        if hand is not None:
+            pred_mask &= np.isfinite(hand)
+        pred_idx = np.where(pred_mask.ravel())[0]
 
-    # Pre-flatten the covariate rasters once to avoid repeated .ravel() copies
-    dem_r   = dem.ravel()
-    slope_r = slope.ravel()
-    wtd_r   = wtd.ravel()  if wtd  is not None else None
-    hand_r  = hand.ravel() if hand is not None else None
+        # Pre-flatten the covariate rasters once
+        dem_r   = dem.ravel()
+        slope_r = slope.ravel()
+        wtd_r   = wtd.ravel()  if wtd  is not None else None
+        hand_r  = hand.ravel() if hand is not None else None
 
-    CHUNK = 500_000
-    for start in range(0, len(pred_idx), CHUNK):
-        chunk_idx = pred_idx[start:start + CHUNK]
-        cols = [dem_r[chunk_idx], slope_r[chunk_idx]]
-        if wtd_r is not None:
-            cols.append(wtd_r[chunk_idx])
-        if hand_r is not None:
-            cols.append(hand_r[chunk_idx])
-        X_chunk = pd.DataFrame(np.column_stack(cols), columns=feature_names)
-        residual_pred.ravel()[chunk_idx] = model.predict(X_chunk).astype(np.float32)
+        CHUNK = 500_000
+        for start in range(0, len(pred_idx), CHUNK):
+            chunk_idx = pred_idx[start:start + CHUNK]
+            cols = [dem_r[chunk_idx], slope_r[chunk_idx]]
+            if wtd_r is not None:
+                cols.append(wtd_r[chunk_idx])
+            if hand_r is not None:
+                cols.append(hand_r[chunk_idx])
+            X_chunk = pd.DataFrame(np.column_stack(cols), columns=feature_names)
+            residual_pred.ravel()[chunk_idx] = model.predict(X_chunk).astype(np.float32)
+    else:
+        # BpS-mean-only: residual is zero everywhere so baseline = bps_mean_full
+        residual_pred = np.zeros_like(etg)
 
     baseline_raw = bps_mean_full + residual_pred
     n_neg_clipped = int(((baseline_raw < 0) & np.isfinite(baseline_raw)).sum())
@@ -867,10 +911,12 @@ def main(study_area: str | None = None) -> None:
     if cfg.MODEL_BACKEND == "lgbm":
         meta_lines += [
             f"lgbm_n_estimators  = {cfg.LGBM_N_ESTIMATORS}",
+            f"lgbm_trees_used    = {n_trees_used if n_trees_used is not None else cfg.LGBM_N_ESTIMATORS}",
             f"lgbm_max_depth     = {cfg.LGBM_MAX_DEPTH}",
             f"lgbm_learning_rate = {cfg.LGBM_LEARNING_RATE}",
             f"lgbm_num_leaves    = {cfg.LGBM_NUM_LEAVES}",
             f"lgbm_min_child     = {cfg.LGBM_MIN_CHILD}",
+            f"early_stopping     = {'yes' if n_trees_used is not None else 'no (too few samples)'}",
         ]
     else:
         meta_lines += [
@@ -878,6 +924,7 @@ def main(study_area: str | None = None) -> None:
             f"rf_max_depth        = {cfg.RF_MAX_DEPTH}",
             f"rf_min_samples_leaf = {cfg.RF_MIN_SAMPLES_LEAF}",
         ]
+    meta_lines.append(f"use_residual_model = {'yes' if use_residual else 'no (CV R² < 0, BpS-mean only)'}")
 
     meta_lines += [
         "",

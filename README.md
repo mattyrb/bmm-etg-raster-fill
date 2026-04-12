@@ -246,8 +246,12 @@ Each basin gets a `config.toml` with sensible defaults. Edit as needed:
 | `feather_width_px` | `4` | Gaussian feathering sigma in pixels |
 | `max_slope_deg` | `5.0` | Maximum slope for training pixels (degrees) |
 | `backend` | `"lgbm"` | `"lgbm"` (LightGBM) or `"rf"` (RandomForest) |
+| `use_wtd` | `true` | Include water-table depth covariate |
+| `use_hand` | `true` | Include Height Above Nearest Drainage covariate |
+| `baseline_adjust` | `1.0` | Expert adjustment scalar (0.8 = reduce 20%) |
 
-See `config.toml` comments for the full parameter list including CRS overrides.
+See `config.toml` comments for the full parameter list including CRS overrides
+and LightGBM/RandomForest hyperparameters.
 
 ### 5. Run
 
@@ -389,16 +393,28 @@ class from the training pixels. This lookup table captures the dominant
 ecological-setting signal.
 
 **Stage 2 -- Terrain residual model:** The residual `(ETg - BpS_class_mean)` is
-modeled as a function of elevation, slope, and (optionally) water table depth using
-LightGBM or RandomForest. A 3-fold cross-validation reports the residual R-squared.
-Feature importances are logged and saved to the run metadata.
+modeled as a function of elevation, slope, and (optionally) water table depth
+and HAND using LightGBM or RandomForest. For LightGBM, early stopping is used
+to prevent over-training: 20% of the training data is held out as a validation
+split, and tree-building stops when the validation loss fails to improve for 20
+consecutive rounds. The model is then refitted on the full training set with
+the optimal tree count. A 3-fold cross-validation (CV) reports the residual
+R-squared. Feature importances are logged and saved to the run metadata.
+
+**Automatic fallback:** If the 3-fold CV R-squared is negative -- meaning the
+residual model's predictions are worse than simply using the BpS class mean
+alone -- the residual model is skipped and the baseline becomes the per-BpS
+mean only. This prevents over-trained terrain models from injecting noise into
+the output for basins where the terrain covariates carry little signal.
 
 ### Step 6: Predict baseline ETg
 
 For every pixel with valid covariates, the predicted baseline is
-`BpS_class_mean + terrain_residual_prediction`, clamped to a minimum of zero.
-BpS classes that appear only inside treatment zones fall back to the global
-training mean. The number of pixels clipped from negative values is logged.
+`BpS_class_mean + terrain_residual_prediction`, clamped to a minimum of zero
+(or just `BpS_class_mean` if the residual model was skipped due to negative
+CV R-squared). BpS classes that appear only inside treatment zones fall back
+to the global training mean. The number of pixels clipped from negative values
+is logged.
 
 ### Step 7: Fill treatment zones, apply expert adjustment, and feather edges
 
