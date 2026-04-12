@@ -436,8 +436,10 @@ def _derive_hand_from_dem(
         wbt.fill_depressions,
         dem=str(dem_local),
         output=str(breached),
-        flat_increment=True,
+        fix_flats=True,
     )
+    if not breached.exists():
+        sys.exit(f"ERROR: FillDepressions did not produce {breached}")
 
     _run_tool(
         "2/4  D8FlowAccumulation",
@@ -446,6 +448,8 @@ def _derive_hand_from_dem(
         output=str(flow_accum),
         out_type="cells",
     )
+    if not flow_accum.exists():
+        sys.exit(f"ERROR: D8FlowAccumulation did not produce {flow_accum}")
 
     _run_tool(
         f"3/4  ExtractStreams (threshold = {threshold_cells} cells)",
@@ -454,6 +458,8 @@ def _derive_hand_from_dem(
         output=str(streams),
         threshold=threshold_cells,
     )
+    if not streams.exists():
+        sys.exit(f"ERROR: ExtractStreams did not produce {streams}")
 
     _run_tool(
         "4/4  ElevationAboveStream (HAND)",
