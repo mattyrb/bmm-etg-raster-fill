@@ -144,7 +144,6 @@ project/
         DEM_statewide.tif
         BpS_statewide.tif
         WTD_statewide.tif
-        HAND_statewide.tif      Height Above Nearest Drainage (derived from DEM)
 
     basins/                     Per-basin directories (257 NWI basins)
         101_SierraValley/
@@ -188,13 +187,8 @@ If you already have a compatible environment, the key packages are: `numpy`,
 
 ### 2. Prepare statewide covariates (one time)
 
-Clip CONUS-wide DEM, BpS, and WTD rasters to the NWI investigation extent. If you
-omit `--dem`, the script downloads the USGS 3DEP 30-m DEM via `py3dep`. The
-script also derives a HAND (Height Above Nearest Drainage) raster from the
-clipped DEM using whitebox-tools (`BreachDepressionsLeastCost →
-D8FlowAccumulation → ExtractStreams → ElevationAboveStream`); pass `--skip-hand`
-to skip this step or `--hand-threshold N` to tune the stream-extraction
-flow-accumulation threshold (default 1000 cells).
+Clip CONUS-wide DEM, BpS, and WTD rasters to the NWI investigation extent. If
+you omit `--dem`, the script downloads the USGS 3DEP 30-m DEM via `py3dep`.
 
 ```bash
 python prep_statewide.py \
@@ -202,9 +196,18 @@ python prep_statewide.py \
     --wtd  /path/to/wtd_conus.tif
 ```
 
-This writes `DEM_statewide.tif`, `BpS_statewide.tif`, `WTD_statewide.tif`, and
-`HAND_statewide.tif` to the `statewide/` directory, all reprojected to the NWI
-shapefile CRS (EPSG:32611).
+This writes `DEM_statewide.tif`, `BpS_statewide.tif`, and `WTD_statewide.tif`
+to the `statewide/` directory, all reprojected to the NWI shapefile CRS
+(EPSG:32611).
+
+HAND (Height Above Nearest Drainage) is derived *per-basin* during
+`prep_basin.py` rather than statewide. whitebox-tools' `ElevationAboveStream`
+runs out of memory on the full Nevada DEM, so each basin's clipped DEM (with a
+5 km buffer) is processed individually through the standard pipeline
+(`BreachDepressionsLeastCost → D8FlowAccumulation → ExtractStreams →
+ElevationAboveStream`). This is also hydrologically appropriate: closed Great
+Basin sub-basins drain internally, so within-basin "nearest stream" is the
+correct HAND reference.
 
 ### 3. Set up basin directories
 
@@ -212,12 +215,20 @@ shapefile CRS (EPSG:32611).
 # List all 257 basin keys from the NWI shapefile:
 python prep_basin.py --list
 
-# Prep a single basin (clips covariates + generates default config.toml):
+# Prep a single basin (clips covariates, derives HAND, generates config.toml):
 python prep_basin.py 101_SierraValley
 
 # Prep all basins at once:
 python prep_basin.py --all
+
+# Skip HAND derivation (e.g. for quick testing):
+python prep_basin.py 101_SierraValley --skip-hand
 ```
+
+`prep_basin.py` writes `DEM.tif`, `BpS.tif`, `WTD.tif`, and `HAND.tif` to
+`basins/<basin_key>/input/`. HAND is derived from the clipped basin DEM using
+whitebox-tools; tune the stream-extraction threshold with `--hand-threshold N`
+(default 1000 cells ≈ 0.9 km² drainage area).
 
 Then place each basin's ETg raster(s) and treatment shapefile into its
 `basins/<basin_key>/input/` directory and review the generated `config.toml`.

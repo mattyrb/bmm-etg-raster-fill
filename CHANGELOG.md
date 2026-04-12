@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.3] - 2026-04-11
+
+Move HAND derivation from statewide to per-basin.
+
+### Changed
+- HAND (Height Above Nearest Drainage) is now derived inside
+  `prep_basin.py` from each basin's 5 km-buffered clipped DEM, rather
+  than on the full statewide DEM.  whitebox-tools' `ElevationAboveStream`
+  attempted to allocate ~25 GB of RAM on the Nevada-wide 30 m DEM and
+  ran out of memory; per-basin DEMs are small enough that the same
+  pipeline runs in seconds with ordinary memory usage.
+- `prep_basin.py` imports `_derive_hand_from_dem`,
+  `HAND_STREAM_THRESHOLD_CELLS`, and `HAND_BREACH_DIST_CELLS` from
+  `prep_statewide.py`, so there is still a single source of truth for
+  the whitebox pipeline.
+- New `prep_basin.py` CLI flags: `--skip-hand`, `--hand-threshold`,
+  `--hand-breach-dist`, `--keep-hand-intermediates` (mirror of the old
+  flags on `prep_statewide.py`).
+- If HAND derivation fails for an individual basin in a `--all` batch
+  run, the basin continues without HAND rather than aborting the batch.
+
+### Removed
+- HAND no longer produced at the statewide level: `HAND_statewide.tif`
+  and the corresponding `--skip-hand` / `--hand-threshold` /
+  `--hand-breach-dist` / `--keep-hand-intermediates` flags are gone
+  from `prep_statewide.py`.  The `_derive_hand_from_dem()` helper is
+  retained and exported.
+- `HAND_statewide.tif` removed from the `prep_basin.py` statewide
+  presence check.
+
+### Fixed
+- Whitebox HAND pipeline now uses absolute paths for every tool input
+  and output, with `set_verbose_mode(True)` plus a callback that
+  captures whitebox's stdout.  If a tool silently fails or produces no
+  output, the script logs the work-directory contents and the tail of
+  whitebox's captured messages instead of just "output not produced".
+
 ## [0.4.2] - 2026-04-11
 
 HAND (Height Above Nearest Drainage) covariate.

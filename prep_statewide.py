@@ -8,11 +8,12 @@ windowed reads instead of touching the full CONUS files every time.  All
 outputs are reprojected into the NWI shapefile CRS so downstream prep
 operates on a single consistent grid.
 
-Also downloads the 3DEP 30-m DEM via py3dep if no CONUS DEM is provided,
-and derives a Height Above Nearest Drainage (HAND) raster from that DEM
-using whitebox-tools (BreachDepressionsLeastCost → D8FlowAccumulation →
-ExtractStreams → ElevationAboveStream).  This is the same standard pipeline
-used by NASA / NOAA OWP HAND products.
+Also downloads the 3DEP 30-m DEM via py3dep if no CONUS DEM is provided.
+
+HAND (Height Above Nearest Drainage) is *not* derived at the statewide
+level — whitebox-tools' ElevationAboveStream runs out of memory on the
+full Nevada DEM.  HAND is derived per-basin inside prep_basin.py, which
+imports _derive_hand_from_dem() from this module.
 
 Usage
 -----
@@ -20,10 +21,6 @@ Usage
         --bps  /path/to/LF2020_BPS_CONUS.tif \
         --wtd  /path/to/wtd_conus.tif \
         [--dem /path/to/conus_dem.tif]   # optional; downloads 3DEP if omitted
-
-    # Skip HAND or tune its parameters:
-    python prep_statewide.py --bps ... --wtd ... --skip-hand
-    python prep_statewide.py --bps ... --wtd ... --hand-threshold 500
 
 Outputs are written to  <project>/statewide/
 
@@ -484,21 +481,9 @@ def main():
                              "3DEP 30m if omitted)")
     parser.add_argument("--buffer-m", type=float, default=CLIP_BUFFER_M,
                         help=f"Buffer around NWI boundary (default: {CLIP_BUFFER_M} m)")
-    parser.add_argument("--skip-hand", action="store_true",
-                        help="Skip the HAND derivation step (whitebox-tools)")
-    parser.add_argument("--hand-threshold", type=int,
-                        default=HAND_STREAM_THRESHOLD_CELLS,
-                        help=f"Stream initiation threshold in cells for HAND "
-                             f"derivation (default: {HAND_STREAM_THRESHOLD_CELLS} "
-                             f"cells ≈ 0.9 km² at 30 m)")
-    parser.add_argument("--hand-breach-dist", type=int,
-                        default=HAND_BREACH_DIST_CELLS,
-                        help=f"Max breach search distance in cells for "
-                             f"BreachDepressionsLeastCost (default: "
-                             f"{HAND_BREACH_DIST_CELLS} cells)")
-    parser.add_argument("--keep-hand-intermediates", action="store_true",
-                        help="Keep breached DEM, flow accumulation, and "
-                             "streams rasters from HAND derivation")
+    # HAND is now derived per-basin in prep_basin.py (see _derive_hand_from_dem
+    # below for the shared implementation).  The statewide DEM is too large
+    # for whitebox-tools' ElevationAboveStream to process in one pass.
     args = parser.parse_args()
 
     t0 = time.time()
@@ -573,27 +558,21 @@ def main():
     else:
         _download_3dep(clip_geom, clip_crs, dem_dst, target_crs=target_crs)
 
-    # ── Derive HAND from the statewide DEM ──────────────────────────────────
-    hand_dst = STATEWIDE_DIR / "HAND_statewide.tif"
-    if args.skip_hand:
-        _log("Skipping HAND derivation (--skip-hand)")
-    else:
-        _log("Deriving HAND from DEM …")
-        _derive_hand_from_dem(
-            dem_path=dem_dst,
-            dst_path=hand_dst,
-            threshold_cells=args.hand_threshold,
-            breach_dist_cells=args.hand_breach_dist,
-            keep_intermediates=args.keep_hand_intermediates,
-        )
+    # ── HAND note ───────────────────────────────────────────────────────────
+    # HAND (Height Above Nearest Drainage) is no longer derived at the
+    # statewide level.  whitebox-tools' ElevationAboveStream tried to
+    # allocate ~25 GB on the full Nevada 30-m DEM and ran out of memory.
+    # HAND is now derived per-basin inside prep_basin.py, where each basin
+    # DEM easily fits in RAM.  The _derive_hand_from_dem() helper below is
+    # still exported so prep_basin.py can import it.
+    _log("HAND will be derived per-basin in prep_basin.py "
+         "(statewide DEM is too large for ElevationAboveStream).")
 
     # ── Done ────────────────────────────────────────────────────────────────
     _log(f"\nStatewide rasters written to: {STATEWIDE_DIR.resolve()}")
     _log(f"  DEM_statewide.tif")
     _log(f"  BpS_statewide.tif")
     _log(f"  WTD_statewide.tif")
-    if not args.skip_hand:
-        _log(f"  HAND_statewide.tif")
     _log(f"Elapsed: {time.time() - t0:.1f} s")
 
 

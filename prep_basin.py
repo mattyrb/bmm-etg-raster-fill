@@ -3,10 +3,16 @@
 prep_basin.py
 =============
 Per-basin setup: clips DEM, BpS, and WTD from statewide subsets to a single
-basin boundary, and generates a default ``config.toml`` if one doesn't exist.
+basin boundary, derives HAND (Height Above Nearest Drainage) from the
+clipped basin DEM, and generates a default ``config.toml`` if one doesn't
+exist.
 
-Reads the basin polygon from NWI_Investigations_EPSG_32611.shp using the ``Basin`` field
-as the key (e.g. "101_SierraValley").
+HAND is derived per-basin rather than statewide because whitebox-tools'
+ElevationAboveStream runs out of memory on the full Nevada DEM.  Each
+basin DEM (clipped with a 5 km buffer) easily fits in RAM.
+
+Reads the basin polygon from NWI_Investigations_EPSG_32611.shp using the
+``Basin`` field as the key (e.g. "101_SierraValley").
 
 Usage
 -----
@@ -19,6 +25,12 @@ Usage
     # List available basin keys from the NWI shapefile:
     python prep_basin.py --list
 
+    # Skip HAND derivation entirely:
+    python prep_basin.py 101_SierraValley --skip-hand
+
+    # Tune HAND stream threshold (larger = sparser stream network):
+    python prep_basin.py 101_SierraValley --hand-threshold 500
+
 Outputs
 -------
     basins/<basin_key>/
@@ -26,7 +38,7 @@ Outputs
             DEM.tif
             BpS.tif
             WTD.tif
-            HAND.tif
+            HAND.tif     (derived from DEM.tif via whitebox-tools)
         config.toml   (created only if missing — never overwritten)
 
 License: MIT
@@ -52,6 +64,17 @@ try:
     import tomllib
 except ImportError:
     import tomli as tomllib  # Python < 3.11 fallback
+
+# Reuse the HAND derivation implementation from prep_statewide so we have
+# a single source of truth for the whitebox pipeline.  Running HAND
+# per-basin is the only workable option — whitebox's ElevationAboveStream
+# tries to allocate ~25 GB on the full statewide DEM and runs out of
+# memory, but each basin DEM easily fits in RAM.
+from prep_statewide import (
+    _derive_hand_from_dem,
+    HAND_STREAM_THRESHOLD_CELLS,
+    HAND_BREACH_DIST_CELLS,
+)
 
 _here = Path(__file__).resolve().parent
 PROJECT_DIR = _here
@@ -239,7 +262,15 @@ random_seed      = 42
     _log(f"  → config.toml generated (review & edit before running fill)")
 
 
-def prep_one_basin(basin_key: str, gdf_nwi: gpd.GeoDataFrame):
+def prep_one_basin(
+    basin_key: str,
+    gdf_nwi: gpd.GeoDataFrame,
+    *,
+    derive_hand: bool = True,
+    hand_threshold: int = HAND_STREAM_THRESHOLD_CELLS,
+    hand_breach_dist: int = HAND_BREACH_DIST_CELLS,
+    keep_hand_intermediates: bool = False,
+):
     """Set up a single basin directory: clip covariates + generate config."""
     _log(f"\n{'='*60}")
     _log(f"Preparing basin: {basin_key}")
@@ -284,9 +315,37 @@ def prep_one_basin(basin_key: str, gdf_nwi: gpd.GeoDataFrame):
     _clip_from_statewide("WTD_statewide.tif", input_dir / "WTD.tif",
                          clip_geom, clip_crs, Resampling.bilinear)
 
-    _log("  Clipping HAND …")
-    _clip_from_statewide("HAND_statewide.tif", input_dir / "HAND.tif",
-                         clip_geom, clip_crs, Resampling.bilinear)
+    # ── Derive HAND from the basin's clipped DEM ────────────────────────────
+    # whitebox-tools' ElevationAboveStream runs out of memory on the full
+    # statewide DEM, so we derive HAND per-basin.  The basin DEM is already
+    # clipped with a BASIN_CLIP_BUFFER_M (5 km) buffer, which gives the
+    # stream network a little surrounding drainage context at basin edges.
+    if derive_hand:
+        hand_dst = input_dir / "HAND.tif"
+        dem_src  = input_dir / "DEM.tif"
+        if not dem_src.exists():
+            _log("  WARNING: DEM.tif missing — cannot derive HAND")
+        else:
+            try:
+                _derive_hand_from_dem(
+                    dem_path=dem_src,
+                    dst_path=hand_dst,
+                    threshold_cells=hand_threshold,
+                    breach_dist_cells=hand_breach_dist,
+                    keep_intermediates=keep_hand_intermediates,
+                )
+            except SystemExit as exc:
+                # _derive_hand_from_dem calls sys.exit() on failure; we don't
+                # want one bad basin to abort a --all batch run, so catch it
+                # here and continue without HAND for this basin.
+                _log(f"  WARNING: HAND derivation failed for {basin_key}: {exc}")
+                if hand_dst.exists():
+                    try:
+                        hand_dst.unlink()
+                    except OSError:
+                        pass
+    else:
+        _log("  HAND derivation skipped (--skip-hand)")
 
     # ── Generate config.toml ────────────────────────────────────────────────
     _generate_default_config(basin_dir, basin_key, basin_id, basin_name)
@@ -309,6 +368,22 @@ def main():
                         help="List available basin keys and exit")
     parser.add_argument("--only-missing", action="store_true",
                         help="With --all: skip basins that already have DEM.tif")
+    parser.add_argument("--skip-hand", action="store_true",
+                        help="Skip HAND derivation (whitebox-tools).  Useful "
+                             "for testing or if whitebox isn't installed.")
+    parser.add_argument("--hand-threshold", type=int,
+                        default=HAND_STREAM_THRESHOLD_CELLS,
+                        help=f"Stream initiation threshold in cells for HAND "
+                             f"derivation (default: {HAND_STREAM_THRESHOLD_CELLS} "
+                             f"cells ≈ 0.9 km² at 30 m).")
+    parser.add_argument("--hand-breach-dist", type=int,
+                        default=HAND_BREACH_DIST_CELLS,
+                        help=f"Max breach search distance in cells for "
+                             f"BreachDepressionsLeastCost (default: "
+                             f"{HAND_BREACH_DIST_CELLS} cells).")
+    parser.add_argument("--keep-hand-intermediates", action="store_true",
+                        help="Keep breached DEM / flow-accumulation / streams "
+                             "rasters from HAND derivation for inspection.")
     args = parser.parse_args()
 
     gdf_nwi = _load_nwi()
@@ -325,9 +400,10 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    # Check statewide rasters exist
+    # Check statewide rasters exist.  HAND is derived per-basin from the
+    # basin's clipped DEM, so there's no HAND_statewide.tif to check.
     for name in ("DEM_statewide.tif", "BpS_statewide.tif",
-                 "WTD_statewide.tif", "HAND_statewide.tif"):
+                 "WTD_statewide.tif"):
         p = STATEWIDE_DIR / name
         if not p.exists():
             _log(f"WARNING: {p} not found — run prep_statewide.py first")
@@ -346,7 +422,13 @@ def main():
             dem_path = BASINS_DIR / key / "input" / "DEM.tif"
             if dem_path.exists():
                 continue
-        if prep_one_basin(key, gdf_nwi):
+        if prep_one_basin(
+            key, gdf_nwi,
+            derive_hand=not args.skip_hand,
+            hand_threshold=args.hand_threshold,
+            hand_breach_dist=args.hand_breach_dist,
+            keep_hand_intermediates=args.keep_hand_intermediates,
+        ):
             n_ok += 1
         else:
             n_fail += 1
