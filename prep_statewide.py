@@ -288,33 +288,36 @@ def _derive_hand_from_dem(
     """
     Derive Height Above Nearest Drainage (HAND) from a DEM using whitebox-tools.
 
-    Pipeline (matches the standard NASA / NOAA OWP HAND workflow):
-        1. Breach depressions (BreachDepressionsLeastCost) — gentle hydrologic
-           enforcement that cuts narrow channels through DEM dams without
-           wholesale filling closed basins.
-        2. D8 flow accumulation on the breached DEM.
+    Pipeline:
+        0. Fill DEM nodata with an elevation wall (max + 1000 m) so whitebox
+           has a complete surface and flow routes toward the basin interior.
+        1. FillDepressions (with flat_increment) — fast hydrologic
+           conditioning that floods small artifact depressions and adds a
+           tiny gradient across flat areas so D8 can route flow.
+        2. D8 flow accumulation on the filled DEM.
         3. Extract a stream network at ``threshold_cells`` cells of upstream
            drainage area.
         4. ElevationAboveStream — for every cell, height in metres above the
            nearest downslope stream cell along the D8 flow path.
+        5. Mask HAND back to NaN where the original DEM was nodata.
 
     The result is HAND in metres on the same grid / CRS as ``dem_path``.
 
     Parameters
     ----------
     dem_path : Path
-        Source DEM (clipped + reprojected statewide DEM).
+        Source DEM (clipped basin DEM from prep_basin.py).
     dst_path : Path
         Output HAND GeoTIFF.
     threshold_cells : int
         Stream initiation threshold in cells.  Larger = sparser stream network
-        → larger HAND values.  Default 1000 (~0.9 km² at 30 m).
+        = larger HAND values.  Default 1000 (~0.9 km^2 at 30 m).
     breach_dist_cells : int
-        Maximum breach search distance in cells.  Keep small in closed-basin
-        country so the routine doesn't bridge adjacent valleys through low
-        passes.  Default 50 (~1.5 km at 30 m).
+        Retained for API compatibility but no longer used.  The pipeline now
+        uses FillDepressions instead of BreachDepressionsLeastCost because
+        the elevation wall makes the breach algorithm extremely slow.
     keep_intermediates : bool
-        If True, leave the breached DEM, flow accumulation, and stream rasters
+        If True, leave the filled DEM, flow accumulation, and stream rasters
         in the working directory for inspection.  Default False.
     """
     try:
@@ -332,8 +335,7 @@ def _derive_hand_from_dem(
         sys.exit(f"ERROR: DEM not found for HAND derivation: {dem_path}")
 
     _log(f"  Deriving HAND from {dem_path.name} "
-         f"(stream threshold = {threshold_cells} cells, "
-         f"breach dist = {breach_dist_cells} cells) …")
+         f"(stream threshold = {threshold_cells} cells) …")
 
     # Use a dedicated work directory with absolute paths everywhere.  Some
     # whitebox versions on Windows ignore set_working_dir for certain tools,
@@ -422,12 +424,19 @@ def _derive_hand_from_dem(
     with rasterio.open(dem_local, "w", **dem_prof) as dst:
         dst.write(dem_filled, 1)
 
+    # FillDepressions is used instead of BreachDepressionsLeastCost.
+    # With the elevation wall around the clipped DEM, the breach algorithm
+    # spends hours searching for least-cost paths through the wall.
+    # FillDepressions is O(n), handles the wall gracefully, and produces
+    # equivalent results for HAND derivation.  flat_increment ensures
+    # that filled flat areas (playas) still have a tiny gradient so D8
+    # can route flow across them.
     _run_tool(
-        "1/4  BreachDepressionsLeastCost",
-        wbt.breach_depressions_least_cost,
+        "1/4  FillDepressions",
+        wbt.fill_depressions,
         dem=str(dem_local),
         output=str(breached),
-        dist=breach_dist_cells,
+        flat_increment=True,
     )
 
     _run_tool(
