@@ -435,10 +435,33 @@ def _derive_hand_from_dem(
             f"Last whitebox output:\n{tail}"
         )
 
-    # Move final HAND raster to its destination
+    # ── Normalise HAND nodata to NaN (float32) ──────────────────────────────
+    # whitebox may write the HAND raster with an arbitrary nodata sentinel
+    # (e.g. -32768.0 inherited from the DEM, or None / missing tag).  We
+    # re-write as float32 with NaN nodata so _match_raster in
+    # etg_baseline_fill.py (which uses np.isfinite) works consistently.
+    _log("    Normalising HAND to float32 / NaN-nodata …")
+    with rasterio.open(hand_temp) as src:
+        arr = src.read(1).astype(np.float32)
+        src_nd = src.nodata
+        prof = src.profile.copy()
+    # Mask the original nodata value (if any) to NaN
+    if src_nd is not None:
+        arr[arr == np.float32(src_nd)] = np.nan
+    # Also mask any extreme negative values that whitebox sometimes uses
+    arr[arr < -1e4] = np.nan
+    prof.update(dtype="float32", nodata=float("nan"),
+                compress="DEFLATE", predictor=2)
     if dst_path.exists():
         dst_path.unlink()
-    shutil.move(str(hand_temp), str(dst_path))
+    with rasterio.open(dst_path, "w", **prof) as dst:
+        dst.write(arr, 1)
+    # Remove the raw whitebox output
+    if hand_temp.exists():
+        try:
+            hand_temp.unlink()
+        except OSError:
+            pass
 
     # Clean up intermediates unless asked to keep them
     if not keep_intermediates:

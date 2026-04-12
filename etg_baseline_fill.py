@@ -441,6 +441,27 @@ def main(study_area: str | None = None) -> None:
         else:
             _log("  ⚠ HAND raster has 0 valid pixels after reprojection — "
                  "check extent / nodata / CRS.  Continuing WITHOUT HAND.")
+            # Diagnose: report the source raster's metadata so the user can
+            # see what went wrong (mirrors the WTD diagnostic block).
+            try:
+                with rasterio.open(cfg.HAND_TIF) as _src:
+                    _log(f"    HAND source bounds : {_src.bounds}")
+                    _log(f"    HAND source CRS    : {_src.crs}")
+                    _log(f"    HAND source nodata : {_src.nodata}")
+                    _log(f"    HAND source shape  : {_src.shape}")
+                    _log(f"    HAND source dtype  : {_src.dtypes[0]}")
+                    _raw = _src.read(1)
+                    _finite = np.isfinite(_raw.astype(np.float32))
+                    if _src.nodata is not None:
+                        _finite &= (_raw != _src.nodata)
+                    _log(f"    HAND source finite pixels (pre-reproject): "
+                         f"{int(_finite.sum()):,}")
+                    if _finite.any():
+                        _vals = _raw[_finite]
+                        _log(f"    HAND source value range: "
+                             f"{float(_vals.min()):.2f} – {float(_vals.max()):.2f}")
+            except Exception as _e:
+                _log(f"    (could not diagnose HAND source: {_e})")
     else:
         _log("   HAND raster not configured — skipping")
 
@@ -567,7 +588,8 @@ def main(study_area: str | None = None) -> None:
     if hand_flat is not None:
         feat_columns.append(hand_flat)
         feature_names.append("hand")
-    X_train = np.column_stack(feat_columns)
+    import pandas as pd
+    X_train = pd.DataFrame(np.column_stack(feat_columns), columns=feature_names)
 
     _log(f"   5b · Training {cfg.MODEL_BACKEND.upper()} on residuals …")
     if cfg.MODEL_BACKEND == "lgbm":
@@ -641,7 +663,7 @@ def main(study_area: str | None = None) -> None:
             cols.append(wtd_r[chunk_idx])
         if hand_r is not None:
             cols.append(hand_r[chunk_idx])
-        X_chunk = np.column_stack(cols)
+        X_chunk = pd.DataFrame(np.column_stack(cols), columns=feature_names)
         residual_pred.ravel()[chunk_idx] = model.predict(X_chunk).astype(np.float32)
 
     baseline_raw = bps_mean_full + residual_pred
