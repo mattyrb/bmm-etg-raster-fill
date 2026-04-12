@@ -2,6 +2,43 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.0] - 2026-04-12
+
+BpS symbology, spatially weighted fallback, custom study areas.
+
+### Added
+- **Spatially weighted BpS mean fallback**: when the terrain residual
+  model's CV R² is negative, the fill script now computes per-BpS class
+  means using a Gaussian spatial window (default ~1 km radius) instead
+  of a flat basin-wide average.  Each treatment pixel draws more heavily
+  from nearby training pixels of the same vegetation class, producing
+  spatial gradients within each class rather than uniform rates.  The
+  window radius is configurable via `spatial_fallback_radius_px` in
+  config.toml (set to 0 to revert to flat class means).
+- **BpS symbology preservation**: `prep_statewide.py` now extracts the
+  LANDFIRE raster attribute table (class names + RGB colours) from the
+  source BpS raster and caches it as `statewide/bps_lookup.json`.
+  `prep_basin.py` and `prep_custom_basin.py` write QGIS-compatible
+  `.clr` and `.qml` sidecar files alongside each basin's `BpS.tif` so
+  it renders with named, coloured classes in QGIS automatically.
+- **BpS class names in logs and metadata**: `etg_baseline_fill.py` now
+  logs per-class mean ETg with human-readable LANDFIRE class names
+  (e.g. "Great Basin Xeric Mixed Sagebrush Shrubland" instead of just
+  code 10190) and writes a `[bps_class_means]` section in run metadata.
+- **Custom study areas** (`prep_custom_basin.py`): new script for
+  setting up basin directories outside the Nevada NWI framework.
+  Accepts any boundary shapefile, clips DEM/BpS/WTD from CONUS-scale
+  sources, derives HAND, and copies the boundary into `input/` so the
+  fill script can use it as the training mask.  Auto-detects UTM zone
+  from the boundary if the CRS is geographic.
+- **`boundary_shp` in config.toml**: `basin_config.py` and
+  `etg_baseline_fill.py` now support a `boundary_shp` field under
+  `[inputs]`.  When present, the fill script uses this boundary for the
+  training mask instead of requiring the NWI shapefile.  NWI basins are
+  unaffected (NWI is still the fallback).
+- New module `bps_utils.py` with `extract_bps_lookup()`,
+  `load_bps_lookup()`, `write_bps_symbology()`, and `bps_name()`.
+
 ## [0.5.0] - 2026-04-12
 
 Early stopping and automatic BpS-mean fallback.

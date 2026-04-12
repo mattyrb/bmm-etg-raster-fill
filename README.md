@@ -11,7 +11,8 @@ an irrigation signal.
 
 Developed at the [Desert Research Institute (DRI)](https://www.dri.edu/) for
 Nevada's NWI investigation basins (257 hydrographic areas extending into adjacent
-states).
+states).  The workflow also supports custom study areas outside the NWI framework
+via `prep_custom_basin.py` (see Quick Start, step 7).
 
 > **AI disclosure:** This codebase was developed collaboratively with Claude (Anthropic).
 > All scientific decisions, model design choices, and domain validation were made by DRI
@@ -204,7 +205,7 @@ HAND (Height Above Nearest Drainage) is derived *per-basin* during
 `prep_basin.py` rather than statewide. whitebox-tools' `ElevationAboveStream`
 runs out of memory on the full Nevada DEM, so each basin's clipped DEM (with a
 5 km buffer) is processed individually through the standard pipeline
-(`BreachDepressionsLeastCost → D8FlowAccumulation → ExtractStreams →
+(`FillDepressions → D8FlowAccumulation → ExtractStreams →
 ElevationAboveStream`). This is also hydrologically appropriate: closed Great
 Basin sub-basins drain internally, so within-basin "nearest stream" is the
 correct HAND reference.
@@ -248,6 +249,7 @@ Each basin gets a `config.toml` with sensible defaults. Edit as needed:
 | `backend` | `"lgbm"` | `"lgbm"` (LightGBM) or `"rf"` (RandomForest) |
 | `use_wtd` | `true` | Include water-table depth covariate |
 | `use_hand` | `true` | Include Height Above Nearest Drainage covariate |
+| `spatial_fallback_radius_px` | `33` | Spatial window (pixels) for BpS mean fallback when terrain model fails; 0 = flat |
 | `baseline_adjust` | `1.0` | Expert adjustment scalar (0.8 = reduce 20%) |
 
 See `config.toml` comments for the full parameter list including CRS overrides
@@ -289,6 +291,38 @@ python fetch_wtd.py --bbox 39.55 -120.30 39.95 -119.90 -o wtd_SierraValley.tif
 ```
 
 
+### 7. Custom study areas (non-NWI)
+
+For basins outside the Nevada NWI framework (e.g. Sierra Valley CA, or
+basins in other states), use `prep_custom_basin.py` instead of the
+statewide/per-basin NWI pipeline:
+
+```bash
+python prep_custom_basin.py SierraValley \
+    --boundary  /path/to/sierra_valley_boundary.shp \
+    --dem       /path/to/CONUS_DEM.tif \
+    --bps       /path/to/LF2020_BPS_CONUS.tif \
+    --wtd       /path/to/wtd_conus.tif
+```
+
+This clips all covariates to the boundary, derives HAND from the
+clipped DEM, copies the boundary shapefile into `input/boundary.shp`,
+and generates a `config.toml` that references it.
+
+The boundary shapefile replaces the NWI dependency for the training
+mask: `etg_baseline_fill.py` uses the `boundary_shp` config field to
+constrain training pixels to within the study area, so the NWI
+shapefile is not needed.
+
+If your boundary file uses a geographic CRS (e.g. EPSG:4326), the
+script auto-detects the appropriate UTM zone from the centroid. If it
+uses a projected CRS, that CRS is used directly.
+
+The resulting basin directory is identical in structure to an NWI basin.
+All downstream scripts (`etg_baseline_fill.py`, `diagnostics.py`,
+`etunit_summary.py`) work exactly the same way.
+
+
 ## Outputs
 
 All output is written to `basins/<basin_key>/output/`. File names are prefixed
@@ -321,8 +355,16 @@ with the basin key (e.g., `101_SierraValley_ETg_final.tif`).
 
 | File | Description |
 |------|-------------|
-| `{key}_run_metadata.txt` | Configuration, training stats, feature importance, results for the run |
+| `{key}_run_metadata.txt` | Configuration, training stats, feature importance, BpS class means (with names), results |
 | `{key}_run.log` | Timestamped log of the full run for debugging |
+
+### BpS symbology (written by prep scripts)
+
+| File | Description |
+|------|-------------|
+| `input/BpS.clr` | ESRI colour file: maps BpS codes to RGB + class name (works in QGIS and ArcGIS) |
+| `input/BpS.qml` | QGIS layer style file: auto-loads when opening BpS.tif in QGIS |
+| `statewide/bps_lookup.json` | Cached BpS class lookup (code, R, G, B, name) extracted from LANDFIRE source |
 | `{key}_SKIPPED.txt` | Written if basin had too few training pixels (< 50) |
 
 ### Diagnostic plots (PNG)

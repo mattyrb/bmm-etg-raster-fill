@@ -59,6 +59,12 @@ established in prior peer-reviewed work by DRI staff (see README.md, References)
 - Implemented automatic BpS-mean-only fallback when CV R-squared is negative
 - Debugged whitebox-tools integration across five iterations (memory, nodata
   barriers, algorithm selection, parameter naming, file-existence checks)
+- Built BpS symbology utilities: RAT extraction, JSON lookup cache,
+  QGIS-compatible .clr and .qml sidecar generation
+- Added BpS class names to fill script logging and run metadata
+- Implemented custom study area workflow (prep_custom_basin.py): boundary-
+  driven basin setup with auto CRS detection, removing NWI dependency
+  for non-Nevada applications
 - Wrote diagnostic plotting and summary statistics code
 - Debugged CRS handling issues, array broadcasting errors, and matplotlib API
   changes

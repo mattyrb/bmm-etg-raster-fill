@@ -46,6 +46,7 @@ BPS_TIF         = None
 WTD_TIF         = None
 HAND_TIF        = None
 TREATMENT_SHP   = None
+BOUNDARY_SHP    = None   # optional: basin boundary for training mask
 OUT_DIR         = None
 CRS_OVERRIDES   = {}
 
@@ -62,6 +63,7 @@ ATTR_ADJUST      = "adj_fctr"  # per-polygon override column in shapefile
 # Model
 USE_WTD          = True   # include WTD as a covariate (set False to drop it)
 USE_HAND         = True   # include HAND as a covariate (set False to drop it)
+SPATIAL_FALLBACK_RADIUS_PX = 33  # ~1 km at 30 m; 0 = flat class mean only
 MODEL_BACKEND    = "lgbm"
 MAX_SLOPE_DEG    = 5.0
 MAX_TRAIN_PIXELS = 500_000
@@ -149,6 +151,15 @@ def load_basin_from_toml(toml_path: Path) -> None:
     g["HAND_TIF"]      = _resolve_input("hand_tif", "HAND.tif")
     g["TREATMENT_SHP"] = _resolve_input("treatment_shp")
 
+    # Basin boundary shapefile (optional — used for training mask).
+    # If not specified, the fill script falls back to NWI_Investigations.
+    boundary_val = inputs.get("boundary_shp", "")
+    if boundary_val and not boundary_val.startswith("#"):
+        bp = input_dir / boundary_val
+        g["BOUNDARY_SHP"] = bp if bp.exists() else None
+    else:
+        g["BOUNDARY_SHP"] = None
+
     # ── Output directory ────────────────────────────────────────────────────
     g["OUT_DIR"] = basin_dir / "output"
 
@@ -168,6 +179,7 @@ def load_basin_from_toml(toml_path: Path) -> None:
     model = raw.get("model", {})
     g["USE_WTD"]          = bool(model.get("use_wtd", True))
     g["USE_HAND"]         = bool(model.get("use_hand", True))
+    g["SPATIAL_FALLBACK_RADIUS_PX"] = int(model.get("spatial_fallback_radius_px", 33))
     g["MODEL_BACKEND"]    = model.get("backend", "lgbm")
     g["MAX_SLOPE_DEG"]    = _float_or_none(model.get("max_slope_deg", 5.0))
     g["MAX_TRAIN_PIXELS"] = _int_or_none(model.get("max_train_pixels", 500_000))

@@ -132,6 +132,85 @@ def _write_raster(arr: np.ndarray, profile: dict, path: Path,
     _log(f"  → wrote {path.name}  ({arr.shape[1]}×{arr.shape[0]})")
 
 
+def _spatially_weighted_bps_mean(
+    etg_train: np.ndarray,
+    bps: np.ndarray,
+    valid_mask: np.ndarray,
+    unique_bps: np.ndarray,
+    bps_mean_map: dict,
+    radius_px: int = 33,
+) -> np.ndarray:
+    """
+    Compute a spatially weighted per-BpS mean ETg layer.
+
+    For each BpS class, builds a raster of known ETg values at training
+    pixel locations, applies a Gaussian spatial smooth (sigma = radius_px/3
+    so that ~99% of weight falls within ``radius_px``), then divides by a
+    similarly smoothed count to produce a local weighted mean.
+
+    Where the local window contains no training pixels of the same class
+    (e.g. a class that only exists inside the treatment zone), the basin-
+    wide class mean is used as the fallback.
+
+    Parameters
+    ----------
+    etg_train : 2-D array
+        ETg values at training pixel locations; NaN elsewhere.
+    bps : 2-D array (int)
+        BpS class codes for every pixel.
+    valid_mask : 2-D bool array
+        True where training-eligible pixels exist.
+    unique_bps : 1-D array
+        Unique BpS codes present in the training data.
+    bps_mean_map : dict
+        {bps_code: basin-wide mean ETg} — fallback for sparse areas.
+    radius_px : int
+        Approximate radius (in pixels) of the spatial window.  The
+        Gaussian sigma is set to radius_px / 3 so the window captures
+        ~99% of the weight.  At 30 m pixels, the default 33 px ≈ 1 km.
+
+    Returns
+    -------
+    2-D float32 array
+        Spatially varying per-BpS mean ETg, same shape as ``bps``.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    sigma = max(radius_px / 3.0, 1.0)
+    result = np.zeros(bps.shape, dtype=np.float32)
+    global_mean = float(np.nanmean(etg_train[valid_mask]))
+
+    for b in unique_bps:
+        class_mask = (bps == b)
+        train_mask = class_mask & valid_mask & np.isfinite(etg_train)
+
+        n_train = int(train_mask.sum())
+        if n_train == 0:
+            # No training pixels for this class — use basin-wide mean
+            result[class_mask] = bps_mean_map.get(b, global_mean)
+            continue
+
+        # Build value and count layers for this class
+        vals = np.zeros(bps.shape, dtype=np.float64)
+        counts = np.zeros(bps.shape, dtype=np.float64)
+        vals[train_mask] = etg_train[train_mask]
+        counts[train_mask] = 1.0
+
+        # Gaussian smooth both — division gives a weighted local mean
+        vals_smooth = gaussian_filter(vals, sigma=sigma, mode="constant")
+        counts_smooth = gaussian_filter(counts, sigma=sigma, mode="constant")
+
+        # Where counts_smooth is near zero, no nearby training pixels exist
+        has_local = counts_smooth > 1e-10
+        local_mean = np.where(has_local,
+                              vals_smooth / counts_smooth,
+                              bps_mean_map.get(b, global_mean))
+
+        result[class_mask] = local_mean[class_mask].astype(np.float32)
+
+    return result
+
+
 def _match_raster(src_path: Path, ref_profile: dict, resampling, dst_path: Path,
                   categorical: bool = False) -> np.ndarray:
     """
@@ -472,11 +551,37 @@ def main(study_area: str | None = None) -> None:
     _write_raster(slope, etg_prof, out_dir / "slope_matched.tif")
 
     # ── 4b. Basin boundary mask (constrain training to within the basin) ────
-    # If the NWI shapefile is available, rasterize the basin polygon so
-    # training only draws from within-basin pixels.
+    # Priority:  (1) boundary_shp from config.toml  →  (2) NWI shapefile.
+    # Custom boundary_shp lets non-NWI study areas (e.g. Sierra Valley CA)
+    # define their own training mask without needing the NWI shapefile at all.
     basin_mask = None
+    boundary_shp = getattr(cfg, "BOUNDARY_SHP", None)
     nwi_path = _here / "NWI_Investigations_EPSG_32611.shp"
-    if nwi_path.exists():
+
+    if boundary_shp is not None and Path(boundary_shp).exists():
+        # ── Custom boundary from config.toml ──────────────────────────
+        _log(f"  4b · Rasterizing basin boundary (custom: {Path(boundary_shp).name}) …")
+        gdf_bnd = gpd.read_file(boundary_shp)
+        if len(gdf_bnd) == 0:
+            _log("    WARNING: boundary shapefile is empty — using all valid pixels")
+        else:
+            from shapely.ops import unary_union
+            bnd_geom = unary_union(gdf_bnd.geometry)
+            if gdf_bnd.crs is not None and not gdf_bnd.crs.equals(etg_crs):
+                bnd_series = gpd.GeoSeries([bnd_geom], crs=gdf_bnd.crs)
+                bnd_geom = bnd_series.to_crs(etg_crs).iloc[0]
+            basin_mask = rasterize(
+                [(bnd_geom, 1)],
+                out_shape=grid_shape,
+                transform=grid_transform,
+                fill=0,
+                dtype=np.uint8,
+            ).astype(bool)
+            n_basin_px = int(basin_mask.sum())
+            _log(f"    basin boundary pixels: {n_basin_px:,}")
+
+    elif nwi_path.exists():
+        # ── Fall back to NWI shapefile ────────────────────────────────
         _log("  4b · Rasterizing basin boundary (NWI) for training mask …")
         gdf_nwi = gpd.read_file(nwi_path)
         basin_key = cfg.STUDY_AREA_NAME
@@ -506,7 +611,8 @@ def main(study_area: str | None = None) -> None:
             _log(f"    WARNING: basin key '{basin_key}' not found in NWI shapefile "
                  f"— training will use all valid pixels")
     else:
-        _log("    NWI shapefile not found — training will use all valid pixels")
+        _log("    No basin boundary found (no boundary_shp in config, no NWI shapefile) "
+             "— training will use all valid pixels")
 
     # ── 5. Build training set (outside ALL treatment zones, within basin) ───
     _log("5 · Assembling training data …")
@@ -571,6 +677,21 @@ def main(study_area: str | None = None) -> None:
     for b in unique_bps:
         bps_mean_map[b] = float(np.nanmean(y_train[bps_flat == b]))
     _log(f"    BpS classes in training data: {len(unique_bps)}")
+
+    # Load BpS class names for readable logging and metadata
+    try:
+        from bps_utils import load_bps_lookup, bps_name as _bps_name
+        _bps_lut = load_bps_lookup()
+    except Exception:
+        _bps_lut = {}
+        def _bps_name(code, lut=None):
+            return f"BpS {code}"
+
+    for b in sorted(bps_mean_map, key=lambda x: -bps_mean_map[x]):
+        n_px = int((bps_flat == b).sum())
+        _log(f"      {_bps_name(b, _bps_lut):50s}  "
+             f"code={b:<6d}  mean={bps_mean_map[b]:.4f} ft  "
+             f"n={n_px:,}")
 
     bps_mean_train = np.array([bps_mean_map.get(b, 0.0) for b in bps_flat],
                               dtype=np.float32)
@@ -662,23 +783,57 @@ def main(study_area: str | None = None) -> None:
 
     # ── Fallback decision: skip residual model if it hurts ─────────────────
     # A negative CV R² means the residual predictions make the baseline
-    # WORSE than the BpS class means alone.  In that case we zero out
-    # the residual so the final baseline is just the per-BpS mean.
+    # WORSE than the BpS class means alone.  In that case we fall back to
+    # a spatially weighted per-BpS mean (local window smoothing) rather
+    # than a flat basin-wide class average.
     use_residual = cv_mean >= 0.0
+    use_spatial_fallback = False
     if not use_residual:
-        _log(f"    ⚠ CV R² is negative ({cv_mean:.4f}) — the residual model "
-             f"is hurting predictions.  Falling back to BpS-mean-only baseline.")
+        spatial_radius = getattr(cfg, "SPATIAL_FALLBACK_RADIUS_PX", 33)
+        if spatial_radius > 0:
+            use_spatial_fallback = True
+            _log(f"    ⚠ CV R² is negative ({cv_mean:.4f}) — the residual model "
+                 f"is hurting predictions.  Falling back to spatially weighted "
+                 f"BpS means (radius = {spatial_radius} px ≈ "
+                 f"{spatial_radius * abs(etg_prof['transform'].a):.0f} m).")
+        else:
+            _log(f"    ⚠ CV R² is negative ({cv_mean:.4f}) — the residual model "
+                 f"is hurting predictions.  Falling back to flat BpS-mean baseline "
+                 f"(spatial fallback disabled: radius = 0).")
 
     # ── 6. Predict baseline ETg (for replacement zones) ──────────────────────
     _log("6 · Predicting baseline ETg …")
 
-    # Full-raster BpS mean layer
-    bps_mean_full = np.zeros_like(etg)
-    for b, m in bps_mean_map.items():
-        bps_mean_full[bps == b] = m
+    # Build the BpS mean layer — either spatially weighted or flat.
     global_mean = float(np.nanmean(y_train))
-    unseen = ~np.isin(bps, list(bps_mean_map.keys())) & (bps > 0)
-    bps_mean_full[unseen] = global_mean
+
+    if use_spatial_fallback:
+        # Spatially weighted: for each BpS class, nearby training pixels
+        # contribute more than distant ones via Gaussian smoothing.
+        _log("   6a · Computing spatially weighted BpS means …")
+        etg_train_raster = np.full_like(etg, np.nan)
+        etg_train_raster.ravel()[idx] = y_train
+        bps_mean_full = _spatially_weighted_bps_mean(
+            etg_train=etg_train_raster,
+            bps=bps,
+            valid_mask=valid,
+            unique_bps=unique_bps,
+            bps_mean_map=bps_mean_map,
+            radius_px=spatial_radius,
+        )
+        # Handle unseen BpS classes (not in training data)
+        unseen = ~np.isin(bps, list(bps_mean_map.keys())) & (bps > 0)
+        bps_mean_full[unseen] = global_mean
+        _log(f"    spatial BpS mean range: "
+             f"{float(np.nanmin(bps_mean_full[bps_mean_full > 0])):.4f} – "
+             f"{float(np.nanmax(bps_mean_full)):.4f} ft")
+    else:
+        # Flat: single basin-wide mean per BpS class
+        bps_mean_full = np.zeros_like(etg)
+        for b, m in bps_mean_map.items():
+            bps_mean_full[bps == b] = m
+        unseen = ~np.isin(bps, list(bps_mean_map.keys())) & (bps > 0)
+        bps_mean_full[unseen] = global_mean
 
     # Predict residual in chunks (or skip if residual model hurts)
     residual_pred = np.full_like(etg, np.nan)
@@ -707,7 +862,8 @@ def main(study_area: str | None = None) -> None:
             X_chunk = pd.DataFrame(np.column_stack(cols), columns=feature_names)
             residual_pred.ravel()[chunk_idx] = model.predict(X_chunk).astype(np.float32)
     else:
-        # BpS-mean-only: residual is zero everywhere so baseline = bps_mean_full
+        # No residual model — baseline comes entirely from BpS means
+        # (either spatially weighted or flat depending on above)
         residual_pred = np.zeros_like(etg)
 
     baseline_raw = bps_mean_full + residual_pred
@@ -924,7 +1080,16 @@ def main(study_area: str | None = None) -> None:
             f"rf_max_depth        = {cfg.RF_MAX_DEPTH}",
             f"rf_min_samples_leaf = {cfg.RF_MIN_SAMPLES_LEAF}",
         ]
-    meta_lines.append(f"use_residual_model = {'yes' if use_residual else 'no (CV R² < 0, BpS-mean only)'}")
+    if use_residual:
+        residual_status = "yes"
+    elif use_spatial_fallback:
+        residual_status = (f"no (CV R² < 0, spatially weighted BpS means, "
+                           f"radius={spatial_radius}px)")
+    else:
+        residual_status = "no (CV R² < 0, flat BpS-mean only)"
+    meta_lines.append(f"use_residual_model = {residual_status}")
+    meta_lines.append(f"spatial_fallback_radius_px = "
+                      f"{getattr(cfg, 'SPATIAL_FALLBACK_RADIUS_PX', 33)}")
 
     meta_lines += [
         "",
@@ -948,6 +1113,17 @@ def main(study_area: str | None = None) -> None:
     meta_lines.append("[feature_importance]")
     for name, val in zip(feature_names, imp):
         meta_lines.append(f"{name:20s} = {val:.4f}")
+
+    # BpS class breakdown
+    meta_lines.append("")
+    meta_lines.append("[bps_class_means]")
+    meta_lines.append("# code  mean_ETg_ft  n_train_pixels  class_name")
+    for b in sorted(bps_mean_map, key=lambda x: -bps_mean_map[x]):
+        n_px = int((bps_flat == b).sum())
+        meta_lines.append(
+            f"{b:<8d} = {bps_mean_map[b]:.4f}  "
+            f"n={n_px:<8,d}  {_bps_name(b, _bps_lut)}"
+        )
 
     meta_lines += [
         "",

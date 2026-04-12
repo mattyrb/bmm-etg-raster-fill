@@ -601,13 +601,27 @@ def main():
     _log("Clipping BpS …")
     if not args.bps.exists():
         sys.exit(f"ERROR: BpS raster not found: {args.bps}")
+    bps_dst = STATEWIDE_DIR / "BpS_statewide.tif"
     _clip_raster_to_geometry(
-        args.bps, STATEWIDE_DIR / "BpS_statewide.tif",
+        args.bps, bps_dst,
         clip_geom, clip_crs,
         target_crs=target_crs,
         resampling=Resampling.nearest,
         label="BpS",
     )
+
+    # Extract BpS class names / colours from the CONUS source raster and
+    # cache them as statewide/bps_lookup.json.  Downstream scripts
+    # (prep_basin, etg_baseline_fill) use this lookup for symbology files
+    # and human-readable class names in logs and metadata.
+    _log("  Extracting BpS class lookup (names + colours) …")
+    try:
+        from bps_utils import extract_bps_lookup
+        # Read from the CONUS source — it's more likely to carry the full RAT.
+        bps_lut = extract_bps_lookup(args.bps)
+        _log(f"    {len(bps_lut)} BpS classes extracted → statewide/bps_lookup.json")
+    except Exception as e:
+        _log(f"    WARNING: could not extract BpS lookup: {e}")
 
     # ── Clip WTD ────────────────────────────────────────────────────────────
     _log("Clipping WTD …")

@@ -241,6 +241,11 @@ use_wtd          = true
 # in elevation units, which is informative for groundwater ET in
 # phreatophyte / playa-fringe systems.  Set to false to drop it.
 use_hand         = true
+# When the terrain residual model's CV R² is negative, the fill script
+# falls back to spatially weighted BpS class means instead of flat
+# basin-wide averages.  This radius (in pixels) controls the Gaussian
+# smoothing window.  At 30 m, 33 px ~ 1 km.  Set to 0 for flat means.
+spatial_fallback_radius_px = 33
 # "lgbm" (LightGBM, recommended) or "rf" (RandomForest)
 backend          = "lgbm"
 # Exclude training pixels on slopes steeper than this (degrees).
@@ -308,8 +313,20 @@ def prep_one_basin(
                          clip_geom, clip_crs, Resampling.bilinear)
 
     _log("  Clipping BpS …")
-    _clip_from_statewide("BpS_statewide.tif", input_dir / "BpS.tif",
+    bps_dst = input_dir / "BpS.tif"
+    _clip_from_statewide("BpS_statewide.tif", bps_dst,
                          clip_geom, clip_crs, Resampling.nearest)
+
+    # Write QGIS-compatible symbology sidecars (.clr + .qml) so the BpS
+    # raster renders with LANDFIRE class names and colours in QGIS.
+    try:
+        from bps_utils import load_bps_lookup, write_bps_symbology
+        bps_lut = load_bps_lookup()
+        if bps_lut and bps_dst.exists():
+            write_bps_symbology(bps_dst, bps_lut)
+            _log("    → BpS.clr + BpS.qml (QGIS symbology)")
+    except Exception as e:
+        _log(f"    (BpS symbology sidecar skipped: {e})")
 
     _log("  Clipping WTD …")
     _clip_from_statewide("WTD_statewide.tif", input_dir / "WTD.tif",

@@ -142,9 +142,14 @@ used versus the configured maximum.
 
 If 3-fold cross-validation R-squared is negative (meaning the terrain
 residual model is making predictions worse, not better), the residual
-is automatically zeroed out and the baseline falls back to per-BpS
-class means only. A warning is logged and the run metadata records
-`use_residual_model = no`.
+is automatically zeroed out and the baseline falls back to spatially
+weighted per-BpS class means.  Instead of a single flat rate per
+vegetation class, each treatment pixel draws from nearby training
+pixels of the same class using a Gaussian window (~1 km default),
+producing gradients within each class.  The window radius is
+configurable via `spatial_fallback_radius_px` in config.toml (set to 0
+to revert to flat basin-wide class averages).  A warning is logged and
+the run metadata records the fallback method used.
 
 
 ## 8. Run diagnostics and summary
@@ -261,3 +266,51 @@ for each basin in sequence. Basins with too few training pixels are
 gracefully skipped with a marker file. After the batch completes, a
 `cross_basin_summary.csv` is written to the project root for QC across
 all basins.
+
+
+## Custom study areas (outside NWI)
+
+The NWI-based workflow (steps 2-10 above) assumes your basin exists in
+the NWI investigation shapefile. For basins outside Nevada or outside
+the NWI framework entirely, use `prep_custom_basin.py`:
+
+    python prep_custom_basin.py SierraValley \
+        --boundary  path/to/sierra_valley_boundary.shp \
+        --dem       path/to/CONUS_DEM.tif \
+        --bps       path/to/LF2020_BPS_CONUS.tif \
+        --wtd       path/to/wtd_conus.tif
+
+This replaces steps 2-4. It clips all covariates to your boundary,
+derives HAND, copies the boundary into `input/boundary.shp`, and
+generates a `config.toml` with `boundary_shp = "boundary.shp"` so the
+fill script uses your boundary for the training mask instead of looking
+for the NWI shapefile.
+
+You do *not* need `prep_statewide.py` or the NWI shapefile for custom
+basins. You just need:
+
+- A boundary shapefile (or GeoJSON, or GeoPackage)
+- A DEM raster covering (at least) your study area
+- A BpS raster covering your study area
+- Optionally, a WTD raster
+
+If the boundary is in a geographic CRS (lat/lon), the script auto-picks
+the appropriate UTM zone. If it's already in a projected CRS, that CRS
+is used directly for all basin rasters.
+
+From step 5 onward (place your ETg and treatment files, review
+`config.toml`, run the fill), the workflow is identical to an NWI basin.
+
+
+## BpS symbology in QGIS
+
+When you prep a basin (NWI or custom), the prep scripts write `.clr`
+and `.qml` sidecar files alongside `BpS.tif`. These contain the
+LANDFIRE class names and colours, so when you open `BpS.tif` in QGIS
+it renders with a colour-coded legend showing vegetation class names
+rather than raw integer codes. This makes it much easier to cross-
+reference BpS classes during basin review.
+
+The run metadata and log also now report per-class mean ETg with full
+LANDFIRE class names so you can see exactly what rate each vegetation
+type received.
