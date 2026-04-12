@@ -379,13 +379,48 @@ def _derive_hand_from_dem(
         return rc_local if rc_local is not None else 0
 
     # Stage the DEM into the working directory as an absolute path.
+    # CRITICAL: clipped DEMs have nodata outside the basin polygon (from
+    # rasterio.mask).  Whitebox treats nodata cells as barriers, so D8
+    # flow paths die at the polygon edge rather than accumulating into
+    # interior channels.  The fix is to fill nodata with a high elevation
+    # wall so flow routes inward toward the valley floor.  After HAND is
+    # computed we mask back to NaN where the original DEM was nodata.
     dem_local   = (work_dir / "dem_in.tif").resolve()
     breached    = (work_dir / "dem_breached.tif").resolve()
     flow_accum  = (work_dir / "flow_accum.tif").resolve()
     streams     = (work_dir / "streams.tif").resolve()
     hand_temp   = (work_dir / "hand_out.tif").resolve()
 
-    shutil.copy(dem_path, dem_local)
+    with rasterio.open(dem_path) as src:
+        dem_arr = src.read(1).astype(np.float32)
+        dem_prof = src.profile.copy()
+        src_nodata = src.nodata
+
+    # Build a boolean mask of originally-nodata pixels.
+    if src_nodata is not None:
+        nodata_mask = (dem_arr == np.float32(src_nodata)) | ~np.isfinite(dem_arr)
+    else:
+        nodata_mask = ~np.isfinite(dem_arr)
+    n_nodata = int(nodata_mask.sum())
+    n_total  = dem_arr.size
+    _log(f"    DEM has {n_nodata:,} nodata pixels ({100*n_nodata/n_total:.1f}%) "
+         f"— filling with elevation wall for whitebox …")
+
+    # Replace nodata with a wall: max valid elevation + 1000 m.  This
+    # ensures flow routes toward the basin interior rather than toward
+    # the clipped edges.
+    valid_vals = dem_arr[~nodata_mask]
+    if valid_vals.size == 0:
+        _log("    WARNING: DEM has 0 valid pixels — cannot derive HAND")
+        return
+    wall_elev = float(np.nanmax(valid_vals)) + 1000.0
+    dem_filled = dem_arr.copy()
+    dem_filled[nodata_mask] = wall_elev
+
+    # Write the filled DEM (no nodata — every cell has a valid value).
+    dem_prof.update(dtype="float32", nodata=None, count=1)
+    with rasterio.open(dem_local, "w", **dem_prof) as dst:
+        dst.write(dem_filled, 1)
 
     _run_tool(
         "1/4  BreachDepressionsLeastCost",
@@ -435,21 +470,27 @@ def _derive_hand_from_dem(
             f"Last whitebox output:\n{tail}"
         )
 
-    # ── Normalise HAND nodata to NaN (float32) ──────────────────────────────
-    # whitebox may write the HAND raster with an arbitrary nodata sentinel
-    # (e.g. -32768.0 inherited from the DEM, or None / missing tag).  We
-    # re-write as float32 with NaN nodata so _match_raster in
-    # etg_baseline_fill.py (which uses np.isfinite) works consistently.
+    # ── Normalise HAND: mask back original nodata, set NaN ───────────────────
+    # The filled DEM has elevation-wall values where the original DEM was
+    # nodata.  Whitebox computed HAND for those wall cells (huge positive
+    # values that are meaningless).  We mask them back to NaN, along with
+    # any whitebox internal nodata sentinel and extreme negatives.
     _log("    Normalising HAND to float32 / NaN-nodata …")
     with rasterio.open(hand_temp) as src:
         arr = src.read(1).astype(np.float32)
         src_nd = src.nodata
         prof = src.profile.copy()
-    # Mask the original nodata value (if any) to NaN
+    # 1) Mask where the original DEM had nodata (the elevation wall).
+    arr[nodata_mask] = np.nan
+    # 2) Mask whitebox's own nodata sentinel if it set one.
     if src_nd is not None:
         arr[arr == np.float32(src_nd)] = np.nan
-    # Also mask any extreme negative values that whitebox sometimes uses
+    # 3) Mask any extreme negative values that whitebox sometimes writes.
     arr[arr < -1e4] = np.nan
+
+    n_valid = int(np.isfinite(arr).sum())
+    _log(f"    HAND valid pixels after masking: {n_valid:,} / {n_total:,}")
+
     prof.update(dtype="float32", nodata=float("nan"),
                 compress="DEFLATE", predictor=2)
     if dst_path.exists():
