@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.7.0] - 2026-04-13
+
+Optional gSSURGO soil covariates.
+
+### Added
+- **Soil covariates from gSSURGO**: two optional covariates -- Available
+  Water Capacity in the top ~1 m (`AWC.tif`) and depth to restrictive
+  layer (`SoilDepth.tif`) -- can now be added to the terrain residual
+  model.  They proxy sub-surface moisture-holding capacity and rooting
+  depth, which partly control natural ET independently of terrain
+  position.  Each is loaded through the same pattern as WTD and HAND:
+  present in `input/` and reprojects to at least one valid pixel on the
+  ETg grid.  Missing files are skipped silently with a log note.
+- `awc_tif` and `soil_depth_tif` fields in `config.toml` `[inputs]`
+  (default filenames `AWC.tif` and `SoilDepth.tif`).
+- `use_soil` toggle in `config.toml` `[model]` (default `true`);
+  set to `false` to drop both soil covariates regardless of file
+  presence, mirroring `use_wtd` / `use_hand`.
+- `AWC_TIF`, `SOIL_DEPTH_TIF`, and `USE_SOIL` module-level variables
+  on `basin_config.py`.
+- Soil covariates recorded in run metadata `[inputs]` and `[model]`
+  sections; they appear in the `features` list automatically when
+  loaded (e.g. `['elevation', 'slope', 'wtd', 'hand', 'awc',
+  'soil_depth']`).
+- Config.toml templates in `prep_basin.py` and `prep_custom_basin.py`
+  updated with the new fields and a short user-facing comment pointing
+  at gSSURGO as the source.
+
+### Notes
+- The prep scripts do not yet auto-clip gSSURGO -- users supply their
+  own 30 m `AWC.tif` and `SoilDepth.tif` in the basin's `input/`
+  folder.  A statewide gSSURGO clip script may be added later if the
+  feature proves useful.
+
 ## [0.6.0] - 2026-04-12
 
 BpS symbology, spatially weighted fallback, custom study areas.

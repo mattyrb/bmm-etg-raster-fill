@@ -210,6 +210,11 @@ dem_tif       = "DEM.tif"
 bps_tif       = "BpS.tif"
 wtd_tif       = "WTD.tif"
 hand_tif      = "HAND.tif"
+# gSSURGO soil covariates (user-provided -- see README).  Leave as these
+# defaults; if AWC.tif / SoilDepth.tif are not present in input/, the
+# fill script simply skips them.
+awc_tif         = "AWC.tif"
+soil_depth_tif  = "SoilDepth.tif"
 
 [treatment]
 # Buffer distance (metres) around treatment polygons.
@@ -241,6 +246,11 @@ use_wtd          = true
 # in elevation units, which is informative for groundwater ET in
 # phreatophyte / playa-fringe systems.  Set to false to drop it.
 use_hand         = true
+# Include gSSURGO soil covariates (Available Water Capacity in the top
+# ~1 m + depth to restrictive layer)?  Each is loaded only if its raster
+# is present in input/ AND reprojects to at least one valid pixel.  Set
+# to false to drop both entirely regardless of file presence.
+use_soil         = true
 # When the terrain residual model's CV R² is negative, the fill script
 # falls back to spatially weighted BpS class means instead of flat
 # basin-wide averages.  This radius (in pixels) controls the Gaussian

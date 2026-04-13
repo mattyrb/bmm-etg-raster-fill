@@ -277,6 +277,9 @@ dem_tif       = "DEM.tif"
 bps_tif       = "BpS.tif"
 wtd_tif       = "{'WTD.tif' if has_wtd else ''}"
 hand_tif      = "HAND.tif"
+# gSSURGO soil covariates (user-provided; omit files to skip).
+awc_tif         = "AWC.tif"
+soil_depth_tif  = "SoilDepth.tif"
 
 [treatment]
 buffer_m         = 90.0
@@ -291,6 +294,9 @@ attr_adjust        = "adj_fctr"
 [model]
 use_wtd          = {'true' if has_wtd else 'false'}
 use_hand         = true
+# Include gSSURGO soil covariates (AWC + depth to restrictive layer)?
+# Each is loaded only if its raster is present and valid.
+use_soil         = true
 # Spatial fallback: when terrain model CV R² is negative, use spatially
 # weighted BpS means instead of flat averages.  Radius in pixels
 # (33 px ~ 1 km at 30 m).  Set to 0 for flat means.

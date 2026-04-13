@@ -544,6 +544,45 @@ def main(study_area: str | None = None) -> None:
     else:
         _log("   HAND raster not configured — skipping")
 
+    # Optional: Soil covariates from gSSURGO — Available Water Capacity (AWC)
+    # in the top ~1 m and depth to restrictive layer.  Both proxy for the
+    # sub-surface moisture-holding capacity and rooting depth that partly
+    # control natural ET, independently of terrain position.  Loaded and
+    # gated in parallel: each is included only if its raster is present AND
+    # reprojects to at least one valid pixel on the ETg grid.
+    def _load_optional_covariate(tif_path, label, match_path):
+        """Reproject onto ETg grid; return array or None if unusable."""
+        if tif_path is None:
+            _log(f"   {label} raster not configured — skipping")
+            return None
+        _log(f"   Matching {label} to ETg grid …")
+        arr = _match_raster(
+            tif_path, etg_prof, Resampling.bilinear, match_path,
+        )
+        n_valid_px = int(np.isfinite(arr).sum())
+        if n_valid_px == 0:
+            _log(f"  ⚠ {label} raster has 0 valid pixels after reprojection "
+                 "— continuing WITHOUT it.")
+            return None
+        _log(f"    {label} valid pixels: {n_valid_px:,}  "
+             f"range: {np.nanmin(arr):.2f} – {np.nanmax(arr):.2f}")
+        return arr
+
+    awc = None
+    soil_depth = None
+    use_soil = getattr(cfg, "USE_SOIL", True)
+    if not use_soil:
+        _log("   Soil (AWC + depth) disabled in config (use_soil = false) — skipping")
+    else:
+        awc = _load_optional_covariate(
+            getattr(cfg, "AWC_TIF", None), "AWC",
+            out_dir / "AWC_matched.tif",
+        )
+        soil_depth = _load_optional_covariate(
+            getattr(cfg, "SOIL_DEPTH_TIF", None), "SoilDepth",
+            out_dir / "SoilDepth_matched.tif",
+        )
+
     # ── 4. Derive slope ──────────────────────────────────────────────────────
     _log("4 · Computing slope from DEM …")
     cellsize = abs(etg_prof["transform"].a)
@@ -636,6 +675,10 @@ def main(study_area: str | None = None) -> None:
         valid &= np.isfinite(wtd)
     if hand is not None:
         valid &= np.isfinite(hand)
+    if awc is not None:
+        valid &= np.isfinite(awc)
+    if soil_depth is not None:
+        valid &= np.isfinite(soil_depth)
     max_slope = getattr(cfg, "MAX_SLOPE_DEG", None)
     if max_slope is not None:
         n_before_slope = int(valid.sum())
@@ -669,6 +712,8 @@ def main(study_area: str | None = None) -> None:
     slope_flat = slope.ravel()[idx]
     wtd_flat   = wtd.ravel()[idx] if wtd is not None else None
     hand_flat  = hand.ravel()[idx] if hand is not None else None
+    awc_flat   = awc.ravel()[idx] if awc is not None else None
+    soil_depth_flat = soil_depth.ravel()[idx] if soil_depth is not None else None
 
     # ── 5a. Per-BpS-class mean ETg ───────────────────────────────────────────
     _log("   5a · Computing per-BpS mean ETg …")
@@ -709,6 +754,12 @@ def main(study_area: str | None = None) -> None:
     if hand_flat is not None:
         feat_columns.append(hand_flat)
         feature_names.append("hand")
+    if awc_flat is not None:
+        feat_columns.append(awc_flat)
+        feature_names.append("awc")
+    if soil_depth_flat is not None:
+        feat_columns.append(soil_depth_flat)
+        feature_names.append("soil_depth")
     import pandas as pd
     X_train = pd.DataFrame(np.column_stack(feat_columns), columns=feature_names)
 
@@ -843,6 +894,10 @@ def main(study_area: str | None = None) -> None:
             pred_mask &= np.isfinite(wtd)
         if hand is not None:
             pred_mask &= np.isfinite(hand)
+        if awc is not None:
+            pred_mask &= np.isfinite(awc)
+        if soil_depth is not None:
+            pred_mask &= np.isfinite(soil_depth)
         pred_idx = np.where(pred_mask.ravel())[0]
 
         # Pre-flatten the covariate rasters once
@@ -850,6 +905,8 @@ def main(study_area: str | None = None) -> None:
         slope_r = slope.ravel()
         wtd_r   = wtd.ravel()  if wtd  is not None else None
         hand_r  = hand.ravel() if hand is not None else None
+        awc_r   = awc.ravel()  if awc  is not None else None
+        sdp_r   = soil_depth.ravel() if soil_depth is not None else None
 
         CHUNK = 500_000
         for start in range(0, len(pred_idx), CHUNK):
@@ -859,6 +916,10 @@ def main(study_area: str | None = None) -> None:
                 cols.append(wtd_r[chunk_idx])
             if hand_r is not None:
                 cols.append(hand_r[chunk_idx])
+            if awc_r is not None:
+                cols.append(awc_r[chunk_idx])
+            if sdp_r is not None:
+                cols.append(sdp_r[chunk_idx])
             X_chunk = pd.DataFrame(np.column_stack(cols), columns=feature_names)
             residual_pred.ravel()[chunk_idx] = model.predict(X_chunk).astype(np.float32)
     else:
@@ -1039,6 +1100,8 @@ def main(study_area: str | None = None) -> None:
         f"bps_tif          = {cfg.BPS_TIF}",
         f"wtd_tif          = {getattr(cfg, 'WTD_TIF', None)}",
         f"hand_tif         = {getattr(cfg, 'HAND_TIF', None)}",
+        f"awc_tif          = {getattr(cfg, 'AWC_TIF', None)}",
+        f"soil_depth_tif   = {getattr(cfg, 'SOIL_DEPTH_TIF', None)}",
         f"treatment_shp    = {cfg.TREATMENT_SHP}",
         "",
         "[grid]",
@@ -1058,6 +1121,7 @@ def main(study_area: str | None = None) -> None:
         f"backend          = {cfg.MODEL_BACKEND}",
         f"use_wtd          = {getattr(cfg, 'USE_WTD', True)}",
         f"use_hand         = {getattr(cfg, 'USE_HAND', True)}",
+        f"use_soil         = {getattr(cfg, 'USE_SOIL', True)}",
         f"max_slope_deg    = {getattr(cfg, 'MAX_SLOPE_DEG', None)}",
         f"max_train_pixels = {cfg.MAX_TRAIN_PIXELS}",
         f"random_seed      = {cfg.RANDOM_SEED}",

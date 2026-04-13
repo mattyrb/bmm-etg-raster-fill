@@ -45,6 +45,8 @@ DEM_TIF         = None
 BPS_TIF         = None
 WTD_TIF         = None
 HAND_TIF        = None
+AWC_TIF         = None   # available water capacity (top 1 m), from gSSURGO
+SOIL_DEPTH_TIF  = None   # depth to restrictive layer, from gSSURGO
 TREATMENT_SHP   = None
 BOUNDARY_SHP    = None   # optional: basin boundary for training mask
 OUT_DIR         = None
@@ -63,6 +65,7 @@ ATTR_ADJUST      = "adj_fctr"  # per-polygon override column in shapefile
 # Model
 USE_WTD          = True   # include WTD as a covariate (set False to drop it)
 USE_HAND         = True   # include HAND as a covariate (set False to drop it)
+USE_SOIL         = True   # include AWC + soil_depth (gSSURGO) as covariates
 SPATIAL_FALLBACK_RADIUS_PX = 33  # ~1 km at 30 m; 0 = flat class mean only
 MODEL_BACKEND    = "lgbm"
 MAX_SLOPE_DEG    = 5.0
@@ -149,6 +152,8 @@ def load_basin_from_toml(toml_path: Path) -> None:
     g["BPS_TIF"]       = _resolve_input("bps_tif", "BpS.tif")
     g["WTD_TIF"]       = _resolve_input("wtd_tif", "WTD.tif")
     g["HAND_TIF"]      = _resolve_input("hand_tif", "HAND.tif")
+    g["AWC_TIF"]       = _resolve_input("awc_tif", "AWC.tif")
+    g["SOIL_DEPTH_TIF"] = _resolve_input("soil_depth_tif", "SoilDepth.tif")
     g["TREATMENT_SHP"] = _resolve_input("treatment_shp")
 
     # Basin boundary shapefile (optional — used for training mask).

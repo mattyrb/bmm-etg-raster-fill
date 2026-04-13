@@ -155,7 +155,8 @@ project/
             ...
 
     prep_statewide.py       One-time: clip CONUS rasters to NWI extent
-    prep_basin.py           Per-basin: clip covariates + generate config.toml
+    prep_basin.py           Per-basin: clip covariates + generate config.toml (NWI)
+    prep_custom_basin.py    Set up a basin from any boundary shapefile (non-NWI)
     basin_config.py         TOML config reader (per-basin config interface)
     config.py               Legacy config (SierraValley / PineValley only)
     etg_baseline_fill.py    Main workflow (training, prediction, fill, feathering)

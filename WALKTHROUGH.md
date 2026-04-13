@@ -271,35 +271,120 @@ all basins.
 ## Custom study areas (outside NWI)
 
 The NWI-based workflow (steps 2-10 above) assumes your basin exists in
-the NWI investigation shapefile. For basins outside Nevada or outside
-the NWI framework entirely, use `prep_custom_basin.py`:
+the NWI investigation shapefile and that statewide covariates have been
+prepared. For study areas outside Nevada, outside the NWI framework, or
+in other regions entirely, `prep_custom_basin.py` replaces steps 2-4
+in a single command. You do not need the NWI shapefile or
+`prep_statewide.py`.
+
+
+### What you need
+
+Before running, gather these files:
+
+    1. A boundary polygon for the study area -- shapefile, GeoJSON, or
+       GeoPackage.  This defines the area that training pixels are drawn
+       from.  It does not need to be in the same CRS as the rasters.
+
+    2. A DEM raster that covers (at least) the study area plus a few km
+       of buffer.  CONUS-wide sources like USGS 3DEP work, as does any
+       local DEM in GeoTIFF format.
+
+    3. A LANDFIRE BpS raster that covers the study area.  The CONUS-wide
+       LF2020_BPS raster works, or a regional extract.
+
+    4. (Optional) A water-table depth raster.  If omitted, the model
+       trains without WTD and config.toml sets use_wtd = false.
+
+    5. Your ETg raster and treatment shapefile (same as for NWI basins).
+
+
+### Prep the basin
+
+Run the custom prep script with your boundary and covariate sources:
 
     python prep_custom_basin.py SierraValley \
-        --boundary  path/to/sierra_valley_boundary.shp \
-        --dem       path/to/CONUS_DEM.tif \
-        --bps       path/to/LF2020_BPS_CONUS.tif \
-        --wtd       path/to/wtd_conus.tif
+        --boundary  E:\data\sierra_valley_boundary.shp \
+        --dem       E:\data\3DEP_CONUS_30m.tif \
+        --bps       E:\data\LF2020_BPS_CONUS.tif \
+        --wtd       E:\data\wtd_conus.tif
 
-This replaces steps 2-4. It clips all covariates to your boundary,
-derives HAND, copies the boundary into `input/boundary.shp`, and
-generates a `config.toml` with `boundary_shp = "boundary.shp"` so the
-fill script uses your boundary for the training mask instead of looking
-for the NWI shapefile.
+This does the following in one pass:
 
-You do *not* need `prep_statewide.py` or the NWI shapefile for custom
-basins. You just need:
+    - Reads the boundary polygon and determines the output CRS.  If
+      the boundary is in a projected CRS (e.g. UTM), that CRS is used
+      for all basin rasters.  If it is in lat/lon, the script picks the
+      correct UTM zone automatically from the study-area centroid.
 
-- A boundary shapefile (or GeoJSON, or GeoPackage)
-- A DEM raster covering (at least) your study area
-- A BpS raster covering your study area
-- Optionally, a WTD raster
+    - Clips DEM, BpS, and WTD from their source rasters to the boundary
+      (with a 5 km buffer), reprojecting into the target CRS.
 
-If the boundary is in a geographic CRS (lat/lon), the script auto-picks
-the appropriate UTM zone. If it's already in a projected CRS, that CRS
-is used directly for all basin rasters.
+    - Derives HAND from the clipped DEM using the same whitebox-tools
+      pipeline as NWI basins (FillDepressions, D8, ExtractStreams,
+      ElevationAboveStream).
 
-From step 5 onward (place your ETg and treatment files, review
-`config.toml`, run the fill), the workflow is identical to an NWI basin.
+    - Copies the boundary file into input/boundary.shp so the fill
+      script can use it for the training mask.
+
+    - Writes BpS.clr and BpS.qml for QGIS symbology (if the BpS
+      class lookup has been cached from a prior prep_statewide run,
+      or if the source raster carries a raster attribute table).
+
+    - Generates config.toml with boundary_shp = "boundary.shp" and
+      sensible defaults.
+
+The output directory looks the same as an NWI basin:
+
+    basins/SierraValley/
+        input/
+            DEM.tif
+            BpS.tif
+            BpS.clr
+            BpS.qml
+            WTD.tif
+            HAND.tif
+            boundary.shp  (+ .shx, .dbf, .prj)
+        output/
+        config.toml
+
+Optional flags:
+
+    --skip-hand                 Skip HAND derivation
+    --hand-threshold 500        Sparser stream network for HAND
+    --buffer-m 10000            Wider covariate clip buffer (metres)
+
+
+### Place your data and run
+
+From here the workflow is identical to NWI basins.  Copy your ETg
+raster and treatment shapefile into input/, review config.toml, and
+run:
+
+    python etg_baseline_fill.py SierraValley
+    python diagnostics.py SierraValley
+    python etunit_summary.py SierraValley
+
+The fill script finds `boundary_shp = "boundary.shp"` in config.toml
+and uses it for the training mask -- it never looks for the NWI
+shapefile.  All output rasters, metadata, diagnostics, and summaries
+work exactly the same way.
+
+
+### Key differences from NWI basins
+
+    - No statewide prep step.  Covariates are clipped directly from
+      their source rasters rather than from pre-built statewide subsets.
+
+    - CRS is auto-detected.  NWI basins all use EPSG:32611 (UTM 11N).
+      Custom basins use whatever CRS the boundary polygon carries, or
+      an auto-selected UTM zone if the boundary is geographic.
+
+    - Training mask uses boundary.shp.  NWI basins use the NWI
+      investigation polygon.
+
+    - run_all.py does not discover custom basins automatically.  You
+      run them individually.  (A batch run across custom basins would
+      require listing their keys explicitly.)
 
 
 ## BpS symbology in QGIS
