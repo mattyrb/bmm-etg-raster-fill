@@ -49,7 +49,7 @@ PROJECT_DIR = _here
 STATEWIDE_DIR = PROJECT_DIR / "statewide"
 NWI_SHP = _here / "NWI_Investigations_EPSG_32611.shp"
 
-# Buffer (metres) around the dissolved NWI boundary when clipping.
+# Buffer (meters) around the dissolved NWI boundary when clipping.
 # Ensures edge basins have covariate data right up to and slightly beyond
 # their boundary so reprojection doesn't produce NaN strips.
 CLIP_BUFFER_M = 10_000  # 10 km
@@ -57,6 +57,14 @@ CLIP_BUFFER_M = 10_000  # 10 km
 # HAND derivation defaults (whitebox-tools).  See _derive_hand_from_dem().
 HAND_STREAM_THRESHOLD_CELLS = 1_000   # ≈0.9 km² at 30 m
 HAND_BREACH_DIST_CELLS      = 50      # ≈1.5 km — keeps closed basins isolated
+
+# REM derivation defaults (scipy percentile filter).  See _derive_rem_from_dem().
+# REM (Relative Elevation Model) is an optional alternative to HAND for closed
+# Great Basin sub-basins that don't have integrated drainage networks.  It is
+# computed as DEM minus the low-percentile neighbourhood of the DEM, giving
+# "height above valley floor" without any flow-routing step.
+REM_WINDOW_PX    = 67     # ≈2 km at 30 m (square window side in pixels)
+REM_PERCENTILE_Q = 5.0    # 5th percentile ≈ robust valley-floor proxy
 
 
 def _log(msg: str) -> None:
@@ -189,8 +197,16 @@ def _download_3dep(clip_geom, clip_crs, dst_path: Path, target_crs=None):
     """
     Download USGS 3DEP 30-m DEM for the clip geometry using py3dep.
     Falls back to instructions if py3dep is not available.  If ``target_crs``
-    is provided, the DEM is reprojected from EPSG:4326 into that CRS before
-    being written.
+    is provided, the DEM is reprojected from py3dep's native output CRS into
+    that CRS before being written.
+
+    IMPORTANT: py3dep's returned DataArray carries its own CRS and transform
+    (via rioxarray).  We MUST use those rather than reconstructing a transform
+    from the requested bbox, because py3dep snaps to tile boundaries and may
+    return the array in a CRS other than the one passed in ``crs=…``.  Earlier
+    versions of this function stamped EPSG:4326 onto the returned array and
+    rebuilt the transform from the requested bbox, which produced visibly
+    warped/shifted DEMs (sometimes hundreds of km off) once reprojected.
     """
     _log("  Downloading 3DEP 30-m DEM via py3dep …")
     try:
@@ -208,15 +224,27 @@ def _download_3dep(clip_geom, clip_crs, dst_path: Path, target_crs=None):
     bounds = geom_4326.total_bounds  # (minx, miny, maxx, maxy)
     _log(f"    bbox (EPSG:4326): {bounds}")
 
-    # py3dep.get_dem returns an xarray DataArray in EPSG:4326
     dem = py3dep.get_dem(tuple(bounds), resolution=30, crs="EPSG:4326")
 
-    # Build a rasterio-friendly source array + transform in EPSG:4326
-    src_transform = rasterio.transform.from_bounds(
-        *bounds, dem.shape[1], dem.shape[0]
-    )
-    src_crs = rasterio.crs.CRS.from_epsg(4326)
+    # Trust py3dep's own georeferencing (via rioxarray) rather than
+    # reconstructing it from the requested bbox.
+    try:
+        src_transform = dem.rio.transform()
+        src_crs = dem.rio.crs
+    except AttributeError:
+        sys.exit(
+            "ERROR: the DataArray returned by py3dep.get_dem has no rio "
+            "accessor.\n  Install rioxarray:  pip install rioxarray"
+        )
+    if src_crs is None:
+        sys.exit(
+            "ERROR: py3dep.get_dem returned a DEM with no CRS.  Cannot "
+            "safely georeference the output."
+        )
     src_arr = dem.values.astype(np.float32)
+
+    _log(f"    py3dep returned: CRS={src_crs.to_string()}, "
+         f"shape={src_arr.shape}, pixel=({src_transform.a:g}, {src_transform.e:g})")
 
     # If we don't need to reproject, write directly
     if target_crs is None:
@@ -244,10 +272,17 @@ def _download_3dep(clip_geom, clip_crs, dst_path: Path, target_crs=None):
             dst.write(src_arr, 1)
     else:
         _log(f"    Reprojecting DEM {src_crs.to_string()} → {dst_crs.to_string()}")
+        # Derive source bounds from the ACTUAL transform returned by py3dep,
+        # not from the requested bbox (which is in EPSG:4326 and does not
+        # necessarily match the returned array's CRS/grid).
+        src_bounds = rasterio.transform.array_bounds(
+            src_arr.shape[0], src_arr.shape[1], src_transform
+        )
         dst_transform, dst_width, dst_height = calculate_default_transform(
             src_crs, dst_crs,
             src_arr.shape[1], src_arr.shape[0],
-            left=bounds[0], bottom=bounds[1], right=bounds[2], top=bounds[3],
+            left=src_bounds[0], bottom=src_bounds[1],
+            right=src_bounds[2], top=src_bounds[3],
         )
         profile = {
             "driver": "GTiff",
@@ -297,11 +332,11 @@ def _derive_hand_from_dem(
         2. D8 flow accumulation on the filled DEM.
         3. Extract a stream network at ``threshold_cells`` cells of upstream
            drainage area.
-        4. ElevationAboveStream — for every cell, height in metres above the
+        4. ElevationAboveStream — for every cell, height in meters above the
            nearest downslope stream cell along the D8 flow path.
         5. Mask HAND back to NaN where the original DEM was nodata.
 
-    The result is HAND in metres on the same grid / CRS as ``dem_path``.
+    The result is HAND in meters on the same grid / CRS as ``dem_path``.
 
     Parameters
     ----------
@@ -547,6 +582,102 @@ def _derive_hand_from_dem(
         _log(f"    (could not summarise HAND raster: {e})")
 
 
+def _derive_rem_from_dem(
+    dem_path: Path,
+    dst_path: Path,
+    window_px: int = REM_WINDOW_PX,
+    percentile_q: float = REM_PERCENTILE_Q,
+):
+    """
+    Derive a Relative Elevation Model (REM) from a DEM via a moving
+    percentile filter.
+
+        REM = DEM − percentile_filter(DEM, size=window_px, q=percentile_q)
+
+    The low-percentile of each neighbourhood is a robust "local valley
+    floor" proxy.  Subtracting it from the DEM gives a terrain-relative
+    height in meters, analogous to HAND but without requiring flow
+    routing — which is useful in closed Great Basin sub-basins where the
+    drainage network is not integrated.
+
+    Parameters
+    ----------
+    dem_path : Path
+        Source DEM (clipped basin DEM).
+    dst_path : Path
+        Output REM GeoTIFF (float32, NaN nodata).
+    window_px : int
+        Side length of the square percentile-filter window in pixels.
+        Default 67 ≈ 2 km at 30 m.
+    percentile_q : float
+        Percentile (0-100) used as the valley-floor proxy.  Default 5.
+    """
+    try:
+        from scipy.ndimage import percentile_filter
+    except ImportError:
+        sys.exit(
+            "scipy is not installed.  Install with:\n"
+            "  pip install scipy\n"
+            "Required for deriving REM from the DEM."
+        )
+
+    if not dem_path.exists():
+        sys.exit(f"ERROR: DEM not found for REM derivation: {dem_path}")
+
+    _log(f"  Deriving REM from {dem_path.name} "
+         f"(window = {window_px} px, q = {percentile_q}) …")
+
+    with rasterio.open(dem_path) as src:
+        dem_arr = src.read(1).astype(np.float32)
+        src_nodata = src.nodata
+        prof = src.profile.copy()
+
+    # Build nodata mask
+    if src_nodata is not None:
+        nodata_mask = (dem_arr == np.float32(src_nodata)) | ~np.isfinite(dem_arr)
+    else:
+        nodata_mask = ~np.isfinite(dem_arr)
+
+    valid_vals = dem_arr[~nodata_mask]
+    if valid_vals.size == 0:
+        _log("    WARNING: DEM has 0 valid pixels — cannot derive REM")
+        return
+
+    # Fill nodata with a high value so it doesn't pull the low percentile
+    # down at basin edges; we mask back after filtering.
+    wall_elev = float(np.nanmax(valid_vals)) + 1000.0
+    dem_filled = dem_arr.copy()
+    dem_filled[nodata_mask] = wall_elev
+
+    _log("    Running percentile filter …")
+    base = percentile_filter(dem_filled, percentile=percentile_q,
+                             size=int(window_px), mode="nearest")
+    rem = dem_arr - base.astype(np.float32)
+    rem[nodata_mask] = np.nan
+    # Where the low-percentile "base" is higher than the DEM (shouldn't
+    # happen off basin ridges, but clip for safety), floor at 0.
+    rem[rem < 0] = 0.0
+
+    prof.update(dtype="float32", nodata=float("nan"),
+                compress="DEFLATE", predictor=2, count=1)
+    if dst_path.exists():
+        dst_path.unlink()
+    with rasterio.open(dst_path, "w", **prof) as dst:
+        dst.write(rem, 1)
+
+    size_mb = dst_path.stat().st_size / 1e6
+    _log(f"    → {dst_path.name}  ({size_mb:.1f} MB)")
+
+    try:
+        finite = rem[np.isfinite(rem)]
+        if finite.size:
+            _log(f"    REM range (m): {float(finite.min()):.1f} – "
+                 f"{float(finite.max()):.1f}  "
+                 f"(median {float(np.median(finite)):.1f})")
+    except Exception as e:
+        _log(f"    (could not summarise REM raster: {e})")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Clip CONUS rasters to NWI investigation extent."
@@ -558,6 +689,11 @@ def main():
     parser.add_argument("--dem", type=Path, default=None,
                         help="Path to CONUS DEM raster (optional; downloads "
                              "3DEP 30m if omitted)")
+    parser.add_argument("--awc", type=Path, default=None,
+                        help="Path to CONUS gSSURGO AWC raster (optional)")
+    parser.add_argument("--soil-depth", type=Path, default=None,
+                        help="Path to CONUS gSSURGO depth-to-restrictive-layer "
+                             "raster (optional)")
     parser.add_argument("--buffer-m", type=float, default=CLIP_BUFFER_M,
                         help=f"Buffer around NWI boundary (default: {CLIP_BUFFER_M} m)")
     # HAND is now derived per-basin in prep_basin.py (see _derive_hand_from_dem
@@ -579,7 +715,7 @@ def main():
 
     # Dissolve into a single geometry and buffer
     dissolved = unary_union(gdf.geometry)
-    # Buffer in the shapefile's native CRS (should be projected, metres)
+    # Buffer in the shapefile's native CRS (should be projected, meters)
     if gdf.crs is not None and gdf.crs.is_geographic:
         _log("  WARNING: NWI shapefile is in geographic CRS — "
              "reprojecting to EPSG:5070 for buffering")
@@ -635,6 +771,30 @@ def main():
         label="WTD",
     )
 
+    # ── Optional soil covariates: AWC + depth to restrictive layer ──────────
+    if args.awc is not None:
+        _log("Clipping AWC …")
+        if not args.awc.exists():
+            sys.exit(f"ERROR: AWC raster not found: {args.awc}")
+        _clip_raster_to_geometry(
+            args.awc, STATEWIDE_DIR / "AWC_statewide.tif",
+            clip_geom, clip_crs,
+            target_crs=target_crs,
+            resampling=Resampling.bilinear,
+            label="AWC",
+        )
+    if args.soil_depth is not None:
+        _log("Clipping SoilDepth …")
+        if not args.soil_depth.exists():
+            sys.exit(f"ERROR: SoilDepth raster not found: {args.soil_depth}")
+        _clip_raster_to_geometry(
+            args.soil_depth, STATEWIDE_DIR / "SoilDepth_statewide.tif",
+            clip_geom, clip_crs,
+            target_crs=target_crs,
+            resampling=Resampling.bilinear,
+            label="SoilDepth",
+        )
+
     # ── DEM: clip from CONUS file or download 3DEP ──────────────────────────
     dem_dst = STATEWIDE_DIR / "DEM_statewide.tif"
     if args.dem is not None:
@@ -666,6 +826,10 @@ def main():
     _log(f"  DEM_statewide.tif")
     _log(f"  BpS_statewide.tif")
     _log(f"  WTD_statewide.tif")
+    if args.awc is not None:
+        _log(f"  AWC_statewide.tif")
+    if args.soil_depth is not None:
+        _log(f"  SoilDepth_statewide.tif")
     _log(f"Elapsed: {time.time() - t0:.1f} s")
 
 

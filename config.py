@@ -22,7 +22,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 # Each entry MUST contain at minimum:
 #   etg_tif, dem_tif, bps_tif, treatment_shp
 # Optional keys (set to None or omit to skip):
-#   etg_raw_tif, wtd_tif, crs_overrides
+#   wtd_tif, crs_overrides
 # Any shared parameter (model, feathering, etc.) can be overridden per-area
 # by including it here; otherwise the global default below is used.
 
@@ -31,7 +31,6 @@ STUDY_AREAS = {
     "SierraValley": {
         "data_dir":      PROJECT_DIR / "SierraValley_Data",
         "etg_tif":       "HASV1_SierraValley_ETunits_MGv4_no_surface_etg_adj_long_term_median_ft_burned_replacement_rates.tif",
-        "etg_raw_tif":   "HASV1_SierraValley_phreats_w_ag_raw_etg_adj_long_term_median_ft_1984_2025.tif",
         "dem_tif":       "DEM_SierraValley.tif",
         "bps_tif":       "LF2020_BPS_SierraValley.tif",
         "wtd_tif":       "wtd_mean_estimate_RF_additional_inputs_dummy_drop0LP_1s_SierraValley.tif",
@@ -47,7 +46,6 @@ STUDY_AREAS = {
     "PineValley": {
         "data_dir":      PROJECT_DIR / "PineValley_Data",
         "etg_tif":       "HA053_NV_phreats_MASTER_v11_PineValley_053_w_ag_etg_adj_long_term_median_ft_1984_2025.tif",
-        "etg_raw_tif":   "HA053_NV_phreats_MASTER_v11_PineValley_053_w_ag_etg_adj_long_term_median_ft_1984_2025.tif",
         "dem_tif":       "SRTMGL1.tiff",
         "bps_tif":       "LF2020_BPS_CONUS_PineValley.tif",
         "wtd_tif":       "wtd_mean_estimate_RF_additional_inputs_dummy_drop0LP_1s_CONUS2_m_v_20240813_PineValley.tif",
@@ -67,7 +65,6 @@ STUDY_AREAS = {
 STUDY_AREA_NAME = None
 DATA_DIR        = None
 ETG_TIF         = None
-ETG_RAW_TIF     = None
 DEM_TIF         = None
 BPS_TIF         = None
 WTD_TIF         = None
@@ -108,7 +105,6 @@ def load_study_area(name: str) -> None:
     g["STUDY_AREA_NAME"] = name
     g["DATA_DIR"]        = d
     g["ETG_TIF"]         = _resolve("etg_tif")
-    g["ETG_RAW_TIF"]     = _resolve("etg_raw_tif")
     g["DEM_TIF"]         = _resolve("dem_tif")
     g["BPS_TIF"]         = _resolve("bps_tif")
     g["WTD_TIF"]         = _resolve("wtd_tif")
@@ -148,11 +144,11 @@ BASELINE_ADJUST = 1.0
 ATTR_ADJUST     = "adj_fctr"
 
 # ── Treatment-zone options ──────────────────────────────────────────────────
-# Buffer distance (CRS units, typically metres) applied outward from ALL
+# Buffer distance (CRS units, typically meters) applied outward from ALL
 # treatment polygons before rasterizing.  Ensures the modeled baseline
 # extends slightly beyond the mapped boundary so edge feathering blends
 # smoothly.  Set to 0 for no buffer.  Example: 90 = three 30-m pixels.
-BUFFER_M = 90.0   # metres (set to 0.0 to disable)
+BUFFER_M = 90.0   # meters (set to 0.0 to disable)
 
 # ── Model options ────────────────────────────────────────────────────────────
 # Include water table depth (WTD) as a covariate?  Set to False to exclude it

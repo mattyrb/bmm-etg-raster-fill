@@ -121,10 +121,10 @@ def main(study_area: str | None = None):
         transform = src.transform
         grid_shape = etg.shape
         crs = src.crs
-        pixel_w = abs(transform.a)   # pixel width  in CRS units (metres)
-        pixel_h = abs(transform.e)   # pixel height in CRS units (metres)
+        pixel_w = abs(transform.a)   # pixel width  in CRS units (meters)
+        pixel_h = abs(transform.e)   # pixel height in CRS units (meters)
 
-    # Area of one pixel in acres (CRS should be in metres for UTM / Albers)
+    # Area of one pixel in acres (CRS should be in meters for UTM / Albers)
     m2_per_acre = 4046.8564224
     pixel_area_m2 = pixel_w * pixel_h
     pixel_area_ac = pixel_area_m2 / m2_per_acre

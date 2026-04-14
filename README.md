@@ -149,7 +149,8 @@ project/
     basins/                     Per-basin directories (257 NWI basins)
         101_SierraValley/
             config.toml         Per-basin configuration (auto-generated, editable)
-            input/              ETg rasters, treatment shapefiles, clipped covariates
+            source/             Raw ETg raster(s) + treatment shapefile (you drop these in)
+            input/              Prep-generated clipped covariates (DEM, BpS, WTD, HAND, ...)
             output/             Fill results, diagnostics, logs
         053_PineValley/
             ...
@@ -233,7 +234,10 @@ whitebox-tools; tune the stream-extraction threshold with `--hand-threshold N`
 (default 1000 cells ≈ 0.9 km² drainage area).
 
 Then place each basin's ETg raster(s) and treatment shapefile into its
-`basins/<basin_key>/input/` directory and review the generated `config.toml`.
+`basins/<basin_key>/source/` directory (the prep script creates it
+empty) and review the generated `config.toml`.  The `input/` directory
+is reserved for prep-generated clipped covariates; `source/` is for
+user-supplied raws.
 
 ### 4. Configure per-basin parameters
 
@@ -241,15 +245,17 @@ Each basin gets a `config.toml` with sensible defaults. Edit as needed:
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `etg_tif` | -- | ETg raster filename (in `input/`) |
-| `etg_raw_tif` | -- | Raw (unmodified) ETg raster filename |
-| `treatment_shp` | -- | Treatment shapefile filename |
+| `[source] etg_tif` | -- | ETg raster filename (in `source/`) |
+| `[source] treatment_shp` | -- | Treatment shapefile filename |
+| `[source] boundary_shp` | -- | Optional basin boundary shapefile (custom basins) |
 | `buffer_m` | `90.0` | Buffer distance (m) around treatment polygons |
 | `feather_width_px` | `4` | Gaussian feathering sigma in pixels |
 | `max_slope_deg` | `5.0` | Maximum slope for training pixels (degrees) |
 | `backend` | `"lgbm"` | `"lgbm"` (LightGBM) or `"rf"` (RandomForest) |
 | `use_wtd` | `true` | Include water-table depth covariate |
 | `use_hand` | `true` | Include Height Above Nearest Drainage covariate |
+| `use_soil` | `true` | Include gSSURGO soil covariates (AWC + depth to restrictive layer); each loads only if present in `input/` |
+| `use_rem` | `false` | Include Relative Elevation Model (opt-in).  Only generated when prep is run with `--derive-rem`. |
 | `spatial_fallback_radius_px` | `33` | Spatial window (pixels) for BpS mean fallback when terrain model fails; 0 = flat |
 | `baseline_adjust` | `1.0` | Expert adjustment scalar (0.8 = reduce 20%) |
 
@@ -306,9 +312,11 @@ python prep_custom_basin.py SierraValley \
     --wtd       /path/to/wtd_conus.tif
 ```
 
-This clips all covariates to the boundary, derives HAND from the
-clipped DEM, copies the boundary shapefile into `input/boundary.shp`,
-and generates a `config.toml` that references it.
+This clips all covariates to the boundary (writing them to `input/`),
+derives HAND from the clipped DEM, copies the boundary shapefile into
+`source/boundary.shp`, and generates a `config.toml` with a `[source]`
+section that references it.  Drop your raw ETg raster and treatment
+shapefile into `source/` alongside the boundary, then run the fill.
 
 The boundary shapefile replaces the NWI dependency for the training
 mask: `etg_baseline_fill.py` uses the `boundary_shp` config field to
@@ -343,6 +351,9 @@ with the basin key (e.g., `101_SierraValley_ETg_final.tif`).
 | `slope_matched.tif` | Slope in degrees derived from matched DEM |
 | `WTD_matched.tif` | Water-table depth reprojected to ETg grid (if `use_wtd = true`) |
 | `HAND_matched.tif` | Height Above Nearest Drainage reprojected to ETg grid (if `use_hand = true`) |
+| `REM_matched.tif` | Relative Elevation Model reprojected to ETg grid (if `use_rem = true` and `REM.tif` exists) |
+| `AWC_matched.tif` | gSSURGO Available Water Capacity reprojected to ETg grid (if present and `use_soil = true`) |
+| `SoilDepth_matched.tif` | gSSURGO depth to restrictive layer reprojected to ETg grid (if present and `use_soil = true`) |
 
 ### Tables (CSV)
 
@@ -424,8 +435,8 @@ rasterized to constrain training data to within-basin pixels only.
 
 Training data consists of all pixels that are: (a) outside treatment zones,
 (b) within the basin boundary, (c) on slopes below the configured threshold,
-and (d) have valid ETg, DEM, slope, BpS, WTD (if enabled), and HAND (if
-enabled) values with ETg > 0. Up to 500,000 pixels are randomly sampled if
+and (d) have valid ETg, DEM, slope, BpS, WTD (if enabled), HAND (if
+enabled), and soil covariates (if enabled and present) values with ETg > 0. Up to 500,000 pixels are randomly sampled if
 the training set is larger.
 
 If fewer than 50 valid training pixels remain, the basin is gracefully skipped
@@ -436,8 +447,9 @@ class from the training pixels. This lookup table captures the dominant
 ecological-setting signal.
 
 **Stage 2 -- Terrain residual model:** The residual `(ETg - BpS_class_mean)` is
-modeled as a function of elevation, slope, and (optionally) water table depth
-and HAND using LightGBM or RandomForest. For LightGBM, early stopping is used
+modeled as a function of elevation, slope, and (optionally) water table depth,
+HAND, and gSSURGO soil covariates (AWC, depth to restrictive layer) using
+LightGBM or RandomForest. For LightGBM, early stopping is used
 to prevent over-training: 20% of the training data is held out as a validation
 split, and tree-building stops when the validation loss fails to improve for 20
 consecutive rounds. The model is then refitted on the full training set with
@@ -536,7 +548,8 @@ flags these basins for review.
 
 ## Future directions
 
-- Add SSURGO/STATSGO soil texture, depth-to-bedrock, available water capacity
+- Statewide gSSURGO clip script to auto-populate `AWC.tif` / `SoilDepth.tif`
+  per basin (currently user-supplied)
 - Add topographic wetness index (TWI) and distance-to-stream
 - Ensemble multiple models and use prediction intervals for uncertainty
 - Spatial block cross-validation to test for autocorrelation leakage

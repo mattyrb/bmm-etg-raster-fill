@@ -40,13 +40,13 @@ BASINS_DIR = PROJECT_DIR / "basins"
 STUDY_AREA_NAME = None
 DATA_DIR        = None
 ETG_TIF         = None
-ETG_RAW_TIF     = None
 DEM_TIF         = None
 BPS_TIF         = None
 WTD_TIF         = None
 HAND_TIF        = None
 AWC_TIF         = None   # available water capacity (top 1 m), from gSSURGO
 SOIL_DEPTH_TIF  = None   # depth to restrictive layer, from gSSURGO
+REM_TIF         = None   # Relative Elevation Model (optional, opt-in)
 TREATMENT_SHP   = None
 BOUNDARY_SHP    = None   # optional: basin boundary for training mask
 OUT_DIR         = None
@@ -66,6 +66,7 @@ ATTR_ADJUST      = "adj_fctr"  # per-polygon override column in shapefile
 USE_WTD          = True   # include WTD as a covariate (set False to drop it)
 USE_HAND         = True   # include HAND as a covariate (set False to drop it)
 USE_SOIL         = True   # include AWC + soil_depth (gSSURGO) as covariates
+USE_REM          = False  # include REM (Relative Elevation Model) — opt-in
 SPATIAL_FALLBACK_RADIUS_PX = 33  # ~1 km at 30 m; 0 = flat class mean only
 MODEL_BACKEND    = "lgbm"
 MAX_SLOPE_DEG    = 5.0
@@ -115,6 +116,13 @@ def load_basin_from_toml(toml_path: Path) -> None:
     toml_path = Path(toml_path).resolve()
     basin_dir = toml_path.parent
     input_dir = basin_dir / "input"
+    # New (v0.8.0) layout: raw user-supplied rasters + shapefiles live in
+    # source/, prep-script-generated covariates live in input/.  For
+    # backward compatibility, if source/ doesn't exist we fall back to
+    # treating input/ as both (the pre-v0.8.0 behaviour).
+    source_dir = basin_dir / "source"
+    if not source_dir.exists():
+        source_dir = input_dir
 
     # tomllib requires UTF-8 (per the TOML spec).  However, config files
     # generated on Windows before the encoding fix may be in cp1252 / latin-1.
@@ -136,31 +144,42 @@ def load_basin_from_toml(toml_path: Path) -> None:
     g["STUDY_AREA_NAME"] = basin_key
     g["DATA_DIR"] = input_dir
 
-    # ── Inputs ──────────────────────────────────────────────────────────────
+    # ── Inputs (prep-generated covariates) + Source (user-supplied) ─────────
+    # [inputs] fields resolve against input/  (DEM.tif, BpS.tif, WTD.tif,
+    #                                         HAND.tif, AWC.tif, SoilDepth.tif)
+    # [source] fields resolve against source/ (etg_tif, treatment_shp,
+    #                                         boundary_shp)
+    # If [source] is absent from the TOML, those fields are read from
+    # [inputs] instead (legacy behaviour) and resolved via source_dir,
+    # which points at input/ when source/ doesn't exist on disk.
     inputs = raw.get("inputs", {})
+    source = raw.get("source", inputs)   # legacy: fall back to [inputs]
 
-    def _resolve_input(key, fallback=None):
-        val = inputs.get(key, fallback)
+    def _resolve(section, key, base_dir, fallback=None):
+        val = section.get(key, fallback)
         if val is None or val == "" or val.startswith("#"):
             return None
-        p = input_dir / val
+        p = base_dir / val
         return p if p.exists() else None
 
-    g["ETG_TIF"]       = _resolve_input("etg_tif")
-    g["ETG_RAW_TIF"]   = _resolve_input("etg_raw_tif")
-    g["DEM_TIF"]       = _resolve_input("dem_tif", "DEM.tif")
-    g["BPS_TIF"]       = _resolve_input("bps_tif", "BpS.tif")
-    g["WTD_TIF"]       = _resolve_input("wtd_tif", "WTD.tif")
-    g["HAND_TIF"]      = _resolve_input("hand_tif", "HAND.tif")
-    g["AWC_TIF"]       = _resolve_input("awc_tif", "AWC.tif")
-    g["SOIL_DEPTH_TIF"] = _resolve_input("soil_depth_tif", "SoilDepth.tif")
-    g["TREATMENT_SHP"] = _resolve_input("treatment_shp")
+    # Prep-generated covariates (always from input/)
+    g["DEM_TIF"]        = _resolve(inputs, "dem_tif",        input_dir, "DEM.tif")
+    g["BPS_TIF"]        = _resolve(inputs, "bps_tif",        input_dir, "BpS.tif")
+    g["WTD_TIF"]        = _resolve(inputs, "wtd_tif",        input_dir, "WTD.tif")
+    g["HAND_TIF"]       = _resolve(inputs, "hand_tif",       input_dir, "HAND.tif")
+    g["AWC_TIF"]        = _resolve(inputs, "awc_tif",        input_dir, "AWC.tif")
+    g["SOIL_DEPTH_TIF"] = _resolve(inputs, "soil_depth_tif", input_dir, "SoilDepth.tif")
+    g["REM_TIF"]        = _resolve(inputs, "rem_tif",        input_dir, "REM.tif")
+
+    # User-supplied source files (from source/ if present, else input/)
+    g["ETG_TIF"]       = _resolve(source, "etg_tif",       source_dir)
+    g["TREATMENT_SHP"] = _resolve(source, "treatment_shp", source_dir)
 
     # Basin boundary shapefile (optional — used for training mask).
     # If not specified, the fill script falls back to NWI_Investigations.
-    boundary_val = inputs.get("boundary_shp", "")
+    boundary_val = source.get("boundary_shp", "")
     if boundary_val and not boundary_val.startswith("#"):
-        bp = input_dir / boundary_val
+        bp = source_dir / boundary_val
         g["BOUNDARY_SHP"] = bp if bp.exists() else None
     else:
         g["BOUNDARY_SHP"] = None
@@ -184,6 +203,8 @@ def load_basin_from_toml(toml_path: Path) -> None:
     model = raw.get("model", {})
     g["USE_WTD"]          = bool(model.get("use_wtd", True))
     g["USE_HAND"]         = bool(model.get("use_hand", True))
+    g["USE_SOIL"]         = bool(model.get("use_soil", True))
+    g["USE_REM"]          = bool(model.get("use_rem", False))
     g["SPATIAL_FALLBACK_RADIUS_PX"] = int(model.get("spatial_fallback_radius_px", 33))
     g["MODEL_BACKEND"]    = model.get("backend", "lgbm")
     g["MAX_SLOPE_DEG"]    = _float_or_none(model.get("max_slope_deg", 5.0))

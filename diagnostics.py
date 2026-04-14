@@ -87,20 +87,10 @@ def main(study_area: str | None = None):
     print("Loading rasters …")
 
     # Prefer the raw (unmodified) ETg raster so diagnostics compare the true
-    # Landsat-derived ETg — including the irrigation-inflated signal in
-    # treatment zones — against the modeled baseline and final product.
-    # Fall back to the grid-matched copy in the output dir, then to the
-    # burned raster if neither raw source is available.
-    raw_matched = out / "ETg_raw_matched.tif"
-    if raw_matched.exists():
-        print("  Using raw ETg (grid-matched) as original")
-        etg_orig = _read(raw_matched)
-    elif cfg.ETG_RAW_TIF is not None and Path(cfg.ETG_RAW_TIF).exists():
-        print("  Using raw ETg source raster as original")
-        etg_orig = _read(cfg.ETG_RAW_TIF)
-    else:
-        print("  Raw ETg not available — using burned raster as original")
-        etg_orig = _read(cfg.ETG_TIF)
+    # Landsat-derived ETg against the modeled baseline and final product.
+    # The input ETg raster is the only source (no separate raw variant is
+    # supported).
+    etg_orig = _read(cfg.ETG_TIF)
 
     sa = cfg.STUDY_AREA_NAME
     etg_baseline = _read(out / f"{sa}_ETg_baseline_pred.tif")

@@ -435,22 +435,17 @@ def main(study_area: str | None = None) -> None:
     _log(f"    treatment-zone pixels: {n_treat_px:,}")
 
     # ── 2d. Prepare training ETg ────────────────────────────────────────────
-    if cfg.ETG_RAW_TIF is not None:
-        _log("   2d · Matching raw ETg raster to grid …")
-        etg_raw = _match_raster(
-            cfg.ETG_RAW_TIF, etg_prof, Resampling.bilinear,
-            out_dir / "ETg_raw_matched.tif",
-        )
-    else:
-        _log("   2d · Building training ETg (NaN-ing all treatment pixels) …")
-        etg_raw = etg.copy()
-        # The input raster has modified (scaled/replaced) values inside treatment
-        # zones, so we can't trust those pixels for training or as raw values.
-        # Mark them all as NaN — the model will predict baseline for them.
-        treat_mask = treatment_zone.astype(bool)
-        etg_raw[treat_mask] = np.nan
-        n_masked = int(treat_mask.sum())
-        _log(f"    masked {n_masked:,} treatment-zone pixels as NaN")
+    # Start from the input ETg raster and NaN out every treatment-zone pixel
+    # so they're excluded from training (the model will predict baseline
+    # values for them later).  ``etg_raw`` is the working copy with treatment
+    # pixels removed; ``etg`` keeps the original values for reference /
+    # diagnostics.
+    _log("   2d · Building training ETg (NaN-ing all treatment pixels) …")
+    etg_raw = etg.copy()
+    treat_mask = treatment_zone.astype(bool)
+    etg_raw[treat_mask] = np.nan
+    n_masked = int(treat_mask.sum())
+    _log(f"    masked {n_masked:,} treatment-zone pixels as NaN")
 
     # ── 3. Reproject / resample DEM and BpS ──────────────────────────────────
     _log("3 · Matching DEM to ETg grid …")
@@ -499,7 +494,7 @@ def main(study_area: str | None = None) -> None:
         _log("   WTD raster not configured — skipping")
 
     # Optional: Height Above Nearest Drainage (HAND) — derived from DEM in
-    # prep_statewide.py via whitebox-tools, encoded in metres above the nearest
+    # prep_statewide.py via whitebox-tools, encoded in meters above the nearest
     # downslope stream cell.  Informative for groundwater ET in phreatophyte
     # / playa-fringe systems where distance-to-drainage matters.
     hand = None
@@ -543,6 +538,30 @@ def main(study_area: str | None = None) -> None:
                 _log(f"    (could not diagnose HAND source: {_e})")
     else:
         _log("   HAND raster not configured — skipping")
+
+    # Optional: Relative Elevation Model (REM) — derived from DEM via a low-
+    # percentile moving window (prep_basin --derive-rem).  Opt-in alternative
+    # to HAND for closed Great Basin sub-basins without integrated drainage.
+    rem = None
+    use_rem = getattr(cfg, "USE_REM", False)
+    if not use_rem:
+        _log("   REM disabled in config (use_rem = false) — skipping")
+    elif getattr(cfg, "REM_TIF", None) is not None:
+        _log("   Matching REM to ETg grid …")
+        rem_candidate = _match_raster(
+            cfg.REM_TIF, etg_prof, Resampling.bilinear,
+            out_dir / "REM_matched.tif",
+        )
+        n_rem_valid = int(np.isfinite(rem_candidate).sum())
+        if n_rem_valid > 0:
+            rem = rem_candidate
+            _log(f"    REM valid pixels: {n_rem_valid:,}  "
+                 f"range: {np.nanmin(rem):.1f} – {np.nanmax(rem):.1f} m")
+        else:
+            _log("  ⚠ REM raster has 0 valid pixels after reprojection — "
+                 "continuing WITHOUT REM.")
+    else:
+        _log("   REM raster not configured — skipping")
 
     # Optional: Soil covariates from gSSURGO — Available Water Capacity (AWC)
     # in the top ~1 m and depth to restrictive layer.  Both proxy for the
@@ -675,6 +694,8 @@ def main(study_area: str | None = None) -> None:
         valid &= np.isfinite(wtd)
     if hand is not None:
         valid &= np.isfinite(hand)
+    if rem is not None:
+        valid &= np.isfinite(rem)
     if awc is not None:
         valid &= np.isfinite(awc)
     if soil_depth is not None:
@@ -712,6 +733,7 @@ def main(study_area: str | None = None) -> None:
     slope_flat = slope.ravel()[idx]
     wtd_flat   = wtd.ravel()[idx] if wtd is not None else None
     hand_flat  = hand.ravel()[idx] if hand is not None else None
+    rem_flat   = rem.ravel()[idx] if rem is not None else None
     awc_flat   = awc.ravel()[idx] if awc is not None else None
     soil_depth_flat = soil_depth.ravel()[idx] if soil_depth is not None else None
 
@@ -754,6 +776,9 @@ def main(study_area: str | None = None) -> None:
     if hand_flat is not None:
         feat_columns.append(hand_flat)
         feature_names.append("hand")
+    if rem_flat is not None:
+        feat_columns.append(rem_flat)
+        feature_names.append("rem")
     if awc_flat is not None:
         feat_columns.append(awc_flat)
         feature_names.append("awc")
@@ -894,6 +919,8 @@ def main(study_area: str | None = None) -> None:
             pred_mask &= np.isfinite(wtd)
         if hand is not None:
             pred_mask &= np.isfinite(hand)
+        if rem is not None:
+            pred_mask &= np.isfinite(rem)
         if awc is not None:
             pred_mask &= np.isfinite(awc)
         if soil_depth is not None:
@@ -905,6 +932,7 @@ def main(study_area: str | None = None) -> None:
         slope_r = slope.ravel()
         wtd_r   = wtd.ravel()  if wtd  is not None else None
         hand_r  = hand.ravel() if hand is not None else None
+        rem_r   = rem.ravel()  if rem  is not None else None
         awc_r   = awc.ravel()  if awc  is not None else None
         sdp_r   = soil_depth.ravel() if soil_depth is not None else None
 
@@ -916,6 +944,8 @@ def main(study_area: str | None = None) -> None:
                 cols.append(wtd_r[chunk_idx])
             if hand_r is not None:
                 cols.append(hand_r[chunk_idx])
+            if rem_r is not None:
+                cols.append(rem_r[chunk_idx])
             if awc_r is not None:
                 cols.append(awc_r[chunk_idx])
             if sdp_r is not None:
@@ -937,9 +967,9 @@ def main(study_area: str | None = None) -> None:
     _write_raster(baseline, etg_prof, out_dir / f"{sa}_ETg_baseline_pred.tif")
 
     # ── 7. Build final ETg raster ────────────────────────────────────────────
-    # All treatment-zone pixels in etg_raw are NaN (unless a raw raster was
-    # supplied).  We start from etg_raw (= etg outside treatment, NaN inside)
-    # and fill treatment pixels with the appropriate method.
+    # All treatment-zone pixels in etg_raw are NaN.  We start from etg_raw
+    # (= etg outside treatment, NaN inside) and fill treatment pixels with
+    # the appropriate method.
     _log("7 · Building final ETg raster …")
 
     etg_treated = etg_raw.copy()
@@ -1010,15 +1040,31 @@ def main(study_area: str | None = None) -> None:
         # Blend: in the feather band, mix adjusted baseline with raw ETg.
         # etg_treated already has adjusted baseline inside treatment and raw
         # outside, so for the feather band we blend adjusted baseline with raw.
+        #
+        # Irrigation-pull guard: when a feather-band pixel sits on untreated
+        # irrigated ag (raw ETg > baseline, e.g. an adjacent parcel the
+        # treatment polygon didn't capture), the naive weighted mean pulls
+        # the treatment edge UP toward the irrigation value, creating a
+        # visible bright ring around the polygon.  Clip raw at the baseline
+        # before blending so the feather can only pull edges *down* toward
+        # natural values, never *up* toward irrigation signal.
         etg_final = etg_treated.copy()
         fb = feather_band & np.isfinite(etg_raw) & np.isfinite(adjusted_baseline)
+        raw_for_blend = np.minimum(etg_raw[fb], adjusted_baseline[fb])
         blended = (
             blend_weight[fb] * adjusted_baseline[fb]
-            + (1.0 - blend_weight[fb]) * etg_raw[fb]
+            + (1.0 - blend_weight[fb]) * raw_for_blend
         )
-        # Downward-only: feathering must never raise ETg above the raw value
+        # Redundant downward-only safety (guards against any numerical drift)
         blended = np.minimum(blended, etg_raw[fb])
         etg_final[fb] = blended
+
+        # Diagnostic: how many feather-band pixels had their raw clipped
+        # (i.e. were irrigation-pull candidates)?
+        n_irrig_clipped = int((etg_raw[fb] > adjusted_baseline[fb]).sum())
+        if n_irrig_clipped > 0:
+            _log(f"    irrigation-pull guard: {n_irrig_clipped:,} feather "
+                 f"pixels had raw > baseline and were clipped in the blend")
 
         n_feathered = int(((blend_weight > 0.01) & (blend_weight < 0.99)
                            & outside_zone).sum())
@@ -1045,12 +1091,17 @@ def main(study_area: str | None = None) -> None:
     _write_raster(etg_final, etg_prof, out_dir / f"{sa}_ETg_final.tif")
 
     # ── 7d. Per-pixel percent change raster and figure ──────────────────────
-    _log("   7d · Computing per-pixel percent change (raw → final) …")
-    # Use etg_raw (the unmodified Landsat-derived ETg) as the reference
-    pct_change = np.full_like(etg_raw, np.nan, dtype=np.float32)
-    denom_valid = np.isfinite(etg_raw) & (etg_raw > 0) & np.isfinite(etg_final)
+    _log("   7d · Computing per-pixel percent change (input → final) …")
+    # Reference = the original INPUT ETg raster (etg), NOT etg_raw.
+    # etg_raw has every treatment pixel NaN-masked for training (see §2d),
+    # which would make pct_change NaN across entire treatment interiors —
+    # only the feathering ring would show values.  `etg` retains the input
+    # values inside treatment zones, so pct_change shows the true magnitude
+    # of the fill's effect everywhere it changed the raster.
+    pct_change = np.full_like(etg, np.nan, dtype=np.float32)
+    denom_valid = np.isfinite(etg) & (etg > 0) & np.isfinite(etg_final)
     pct_change[denom_valid] = (
-        100.0 * (etg_final[denom_valid] - etg_raw[denom_valid]) / etg_raw[denom_valid]
+        100.0 * (etg_final[denom_valid] - etg[denom_valid]) / etg[denom_valid]
     )
     _write_raster(pct_change, etg_prof, out_dir / f"{sa}_ETg_pct_change.tif")
 
@@ -1095,11 +1146,11 @@ def main(study_area: str | None = None) -> None:
         "[inputs]",
         f"study_area       = {cfg.STUDY_AREA_NAME}",
         f"etg_tif          = {cfg.ETG_TIF}",
-        f"etg_raw_tif      = {cfg.ETG_RAW_TIF}",
         f"dem_tif          = {cfg.DEM_TIF}",
         f"bps_tif          = {cfg.BPS_TIF}",
         f"wtd_tif          = {getattr(cfg, 'WTD_TIF', None)}",
         f"hand_tif         = {getattr(cfg, 'HAND_TIF', None)}",
+        f"rem_tif          = {getattr(cfg, 'REM_TIF', None)}",
         f"awc_tif          = {getattr(cfg, 'AWC_TIF', None)}",
         f"soil_depth_tif   = {getattr(cfg, 'SOIL_DEPTH_TIF', None)}",
         f"treatment_shp    = {cfg.TREATMENT_SHP}",
@@ -1121,6 +1172,7 @@ def main(study_area: str | None = None) -> None:
         f"backend          = {cfg.MODEL_BACKEND}",
         f"use_wtd          = {getattr(cfg, 'USE_WTD', True)}",
         f"use_hand         = {getattr(cfg, 'USE_HAND', True)}",
+        f"use_rem          = {getattr(cfg, 'USE_REM', False)}",
         f"use_soil         = {getattr(cfg, 'USE_SOIL', True)}",
         f"max_slope_deg    = {getattr(cfg, 'MAX_SLOPE_DEG', None)}",
         f"max_train_pixels = {cfg.MAX_TRAIN_PIXELS}",

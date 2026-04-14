@@ -59,13 +59,18 @@ This creates the basin directory structure, clips covariates from the
 statewide subsets, and derives HAND from the basin's clipped DEM:
 
     basins/173A_RailroadValleyNorth/
+        source/              (empty -- you drop your raws here)
         input/
-            DEM.tif
+            DEM.tif          (prep-generated)
             BpS.tif
             WTD.tif
             HAND.tif
         output/
         config.toml
+
+The `source/` directory holds user-supplied raws (ETg raster, treatment
+shapefile, optional boundary).  `input/` is reserved for prep-generated
+clipped covariates -- don't mix raws into it.
 
 HAND derivation uses whitebox-tools (FillDepressions, D8 flow
 accumulation, stream extraction, ElevationAboveStream) and typically
@@ -81,36 +86,45 @@ Optional flags for HAND control:
 ## 5. Place your data files
 
 Copy your ETg raster and treatment shapefile (including all sidecar files:
-`.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`) into the `input/` folder:
+`.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`) into the `source/` folder:
 
-    basins/173A_RailroadValleyNorth/input/
-        DEM.tif              (from prep)
-        BpS.tif              (from prep)
-        WTD.tif              (from prep)
-        HAND.tif             (from prep -- derived per-basin)
-        your_ETg_raster.tif  (you provide this)
-        your_treatment.shp   (you provide this)
-        your_treatment.shx
-        your_treatment.dbf
-        your_treatment.prj
-        your_treatment.cpg
+    basins/173A_RailroadValleyNorth/
+        source/
+            your_ETg_raster.tif  (you provide this)
+            your_treatment.shp   (you provide this)
+            your_treatment.shx
+            your_treatment.dbf
+            your_treatment.prj
+            your_treatment.cpg
+        input/
+            DEM.tif              (from prep)
+            BpS.tif              (from prep)
+            WTD.tif              (from prep)
+            HAND.tif             (from prep -- derived per-basin)
+
+Keep `input/` for the prep-generated covariates only; `source/` is for
+anything you supply.  If you have optional gSSURGO soil covariates
+(`AWC.tif` and/or `SoilDepth.tif`), drop those into `input/` alongside
+the other prep outputs -- they're treated as covariates, not raws.
 
 
 ## 6. Review and edit config.toml
 
 Open `basins/173A_RailroadValleyNorth/config.toml` in a text editor. The
-prep script tries to auto-detect your filenames, but verify the `[inputs]`
-section points to the correct files:
+prep script tries to auto-detect your filenames, but verify the `[source]`
+section points to the correct files (paths resolve against `source/`):
 
-    [inputs]
+    [source]
     etg_tif       = "your_ETg_raster.tif"
     treatment_shp = "your_treatment.shp"
+    # boundary_shp  = "boundary.shp"      # optional, for non-NWI areas
 
-The default parameters are reasonable starting points. Key settings you
-may want to review:
+The `[inputs]` section points at the prep-generated covariates (relative
+to `input/`) and rarely needs editing.  The default parameters are
+reasonable starting points. Key settings you may want to review:
 
     [treatment]
-    buffer_m         = 90.0        # buffer around treatment polygons (metres)
+    buffer_m         = 90.0        # buffer around treatment polygons (meters)
     feather_width_px = 4           # Gaussian blend width outside boundary (pixels)
 
     [adjustment]
@@ -119,6 +133,7 @@ may want to review:
     [model]
     use_wtd          = true        # set false if WTD product is unreliable here
     use_hand         = true        # set false if HAND derivation was unreliable
+    use_soil         = true        # drops gSSURGO AWC + SoilDepth if false
     backend          = "lgbm"      # "lgbm" or "rf"
     max_slope_deg    = 5.0         # exclude steep pixels from training
 
@@ -323,19 +338,22 @@ This does the following in one pass:
       pipeline as NWI basins (FillDepressions, D8, ExtractStreams,
       ElevationAboveStream).
 
-    - Copies the boundary file into input/boundary.shp so the fill
+    - Copies the boundary file into source/boundary.shp so the fill
       script can use it for the training mask.
 
     - Writes BpS.clr and BpS.qml for QGIS symbology (if the BpS
       class lookup has been cached from a prior prep_statewide run,
       or if the source raster carries a raster attribute table).
 
-    - Generates config.toml with boundary_shp = "boundary.shp" and
-      sensible defaults.
+    - Generates config.toml with boundary_shp = "boundary.shp" in the
+      [source] section and sensible defaults elsewhere.
 
 The output directory looks the same as an NWI basin:
 
     basins/SierraValley/
+        source/
+            boundary.shp  (+ .shx, .dbf, .prj)   (from prep)
+            (drop your ETg + treatment shp here)
         input/
             DEM.tif
             BpS.tif
@@ -343,7 +361,6 @@ The output directory looks the same as an NWI basin:
             BpS.qml
             WTD.tif
             HAND.tif
-            boundary.shp  (+ .shx, .dbf, .prj)
         output/
         config.toml
 
@@ -351,14 +368,15 @@ Optional flags:
 
     --skip-hand                 Skip HAND derivation
     --hand-threshold 500        Sparser stream network for HAND
-    --buffer-m 10000            Wider covariate clip buffer (metres)
+    --buffer-m 10000            Wider covariate clip buffer (meters)
 
 
 ### Place your data and run
 
 From here the workflow is identical to NWI basins.  Copy your ETg
-raster and treatment shapefile into input/, review config.toml, and
-run:
+raster and treatment shapefile into source/ (alongside the boundary
+shapefile the prep script already placed there), review config.toml,
+and run:
 
     python etg_baseline_fill.py SierraValley
     python diagnostics.py SierraValley

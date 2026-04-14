@@ -86,15 +86,18 @@ except ImportError as e:
 
 from prep_statewide import (
     _derive_hand_from_dem,
+    _derive_rem_from_dem,
     HAND_STREAM_THRESHOLD_CELLS,
     HAND_BREACH_DIST_CELLS,
+    REM_WINDOW_PX,
+    REM_PERCENTILE_Q,
 )
 
 _here = Path(__file__).resolve().parent
 PROJECT_DIR = _here
 BASINS_DIR = PROJECT_DIR / "basins"
 
-# Buffer around boundary when clipping covariates (metres).
+# Buffer around boundary when clipping covariates (meters).
 CLIP_BUFFER_M = 5_000  # 5 km
 
 
@@ -120,10 +123,20 @@ def _clip_raster(
     target_crs,
     resampling=Resampling.bilinear,
     label: str = "",
+    force: bool = False,
 ):
     """
     Clip a raster to a geometry and reproject into target_crs.
+
+    If ``dst_path`` already exists, return immediately unless ``force`` is
+    True.  This lets users pre-populate input/ with data staged from
+    another machine without re-running an expensive clip.
     """
+    if dst_path.exists() and not force:
+        size_mb = dst_path.stat().st_size / 1e6
+        _log(f"  {label or src_path.name}: {dst_path.name} already present "
+             f"({size_mb:.1f} MB) — skipping (use --force to rebuild)")
+        return
     _log(f"  Clipping {label or src_path.name} …")
 
     with rasterio.open(src_path) as src:
@@ -205,9 +218,10 @@ def _clip_raster(
     _log(f"    → {dst_path.name}  ({size_mb:.1f} MB)")
 
 
-def _copy_boundary(boundary_path: Path, input_dir: Path) -> Path:
+def _copy_boundary(boundary_path: Path, dest_dir: Path) -> Path:
     """
-    Copy boundary shapefile (and its sidecar files) into input/.
+    Copy boundary shapefile (and its sidecar files) into ``dest_dir``
+    (which should be the basin's source/ directory).
     Returns the destination path of the .shp file.
     """
     stem = boundary_path.stem
@@ -218,17 +232,17 @@ def _copy_boundary(boundary_path: Path, input_dir: Path) -> Path:
                 ".geojson", ".gpkg"):
         src_file = src_dir / f"{stem}{ext}"
         if src_file.exists():
-            dst_file = input_dir / f"{dst_stem}{ext}"
+            dst_file = dest_dir / f"{dst_stem}{ext}"
             shutil.copy2(src_file, dst_file)
 
     # Handle GeoJSON / GPKG that don't have sidecars
     if boundary_path.suffix.lower() in (".geojson", ".gpkg"):
-        dst = input_dir / f"{dst_stem}{boundary_path.suffix.lower()}"
+        dst = dest_dir / f"{dst_stem}{boundary_path.suffix.lower()}"
         if not dst.exists():
             shutil.copy2(boundary_path, dst)
         return dst
 
-    return input_dir / f"{dst_stem}.shp"
+    return dest_dir / f"{dst_stem}.shp"
 
 
 def _generate_config(basin_dir: Path, basin_key: str,
@@ -239,10 +253,15 @@ def _generate_config(basin_dir: Path, basin_key: str,
         _log(f"  config.toml already exists — preserving your edits")
         return
 
+    # Scan source/ (preferred) then input/ (legacy) for raws
+    source_dir = basin_dir / "source"
     input_dir = basin_dir / "input"
-    etg_candidates = sorted(input_dir.glob("*etg*median*.tif")) + \
-                     sorted(input_dir.glob("*ETg*.tif"))
-    shp_candidates = sorted(input_dir.glob("*.shp"))
+    search_dirs = [source_dir, input_dir] if source_dir.exists() else [input_dir]
+    etg_candidates, shp_candidates = [], []
+    for d in search_dirs:
+        etg_candidates += sorted(d.glob("*etg*median*.tif")) + \
+                          sorted(d.glob("*ETg*.tif"))
+        shp_candidates += sorted(d.glob("*.shp"))
     treatment_shps = [s for s in shp_candidates
                       if s.stem != "boundary" and
                       any(kw in s.stem.lower()
@@ -264,15 +283,16 @@ basin_key  = "{basin_key}"
 basin_id   = ""
 basin_name = "{basin_key}"
 
-[inputs]
-# Filenames are relative to the input/ directory for this basin.
+[source]
+# User-supplied files -- relative to source/.
 etg_tif       = "{etg_tif}"
-etg_raw_tif   = ""
 treatment_shp = "{treat_shp}"
 # Basin boundary for training mask (replaces NWI dependency).
 # This was copied from your --boundary file by prep_custom_basin.py.
 boundary_shp  = "{boundary_name}"
-# Covariates:
+
+[inputs]
+# Prep-generated covariates -- relative to input/.
 dem_tif       = "DEM.tif"
 bps_tif       = "BpS.tif"
 wtd_tif       = "{'WTD.tif' if has_wtd else ''}"
@@ -280,6 +300,8 @@ hand_tif      = "HAND.tif"
 # gSSURGO soil covariates (user-provided; omit files to skip).
 awc_tif         = "AWC.tif"
 soil_depth_tif  = "SoilDepth.tif"
+# Relative Elevation Model (only present when prep was run with --derive-rem).
+rem_tif         = "REM.tif"
 
 [treatment]
 buffer_m         = 90.0
@@ -294,6 +316,9 @@ attr_adjust        = "adj_fctr"
 [model]
 use_wtd          = {'true' if has_wtd else 'false'}
 use_hand         = true
+# REM (Relative Elevation Model) is opt-in.  Only set to true if you passed
+# --derive-rem when running prep_custom_basin.py.
+use_rem          = false
 # Include gSSURGO soil covariates (AWC + depth to restrictive layer)?
 # Each is loaded only if its raster is present and valid.
 use_soil         = true
@@ -323,11 +348,17 @@ def prep_custom_basin(
     dem_path: Path,
     bps_path: Path,
     wtd_path: Path | None = None,
+    awc_path: Path | None = None,
+    soil_depth_path: Path | None = None,
     *,
     buffer_m: float = CLIP_BUFFER_M,
     derive_hand: bool = True,
     hand_threshold: int = HAND_STREAM_THRESHOLD_CELLS,
     keep_hand_intermediates: bool = False,
+    derive_rem: bool = False,
+    rem_window_px: int = REM_WINDOW_PX,
+    rem_percentile_q: float = REM_PERCENTILE_Q,
+    force: dict | None = None,
 ):
     """
     Set up a basin directory from user-provided inputs.
@@ -345,7 +376,7 @@ def prep_custom_basin(
     wtd_path : Path or None
         WTD raster (optional).
     buffer_m : float
-        Buffer around boundary for covariate clipping (metres).
+        Buffer around boundary for covariate clipping (meters).
     derive_hand : bool
         Whether to derive HAND from the clipped DEM.
     hand_threshold : int
@@ -353,6 +384,11 @@ def prep_custom_basin(
     keep_hand_intermediates : bool
         Keep whitebox intermediate files for inspection.
     """
+    force = force or {}
+
+    def _force(key: str) -> bool:
+        return bool(force.get("all") or force.get(key))
+
     _log(f"\n{'='*60}")
     _log(f"Preparing custom basin: {basin_key}")
 
@@ -398,15 +434,20 @@ def prep_custom_basin(
     _log(f"  Clip buffer: {buffer_m:.0f} m")
 
     # ── Create directory structure ─────────────────────────────────────
+    #   source/ -- user-supplied raws (ETg, treatment shp, boundary shp)
+    #   input/  -- prep-generated clipped covariates
+    #   output/ -- fill outputs
     basin_dir = BASINS_DIR / basin_key
+    source_dir = basin_dir / "source"
     input_dir = basin_dir / "input"
     output_dir = basin_dir / "output"
+    source_dir.mkdir(parents=True, exist_ok=True)
     input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Copy boundary into input/ ──────────────────────────────────────
-    _log("  Copying boundary into input/ …")
-    bnd_dst = _copy_boundary(boundary_path, input_dir)
+    # ── Copy boundary into source/ ─────────────────────────────────────
+    _log("  Copying boundary into source/ …")
+    bnd_dst = _copy_boundary(boundary_path, source_dir)
     boundary_name = bnd_dst.name
     _log(f"    → {boundary_name}")
 
@@ -415,7 +456,8 @@ def prep_custom_basin(
         sys.exit(f"ERROR: DEM raster not found: {dem_path}")
     _clip_raster(dem_path, input_dir / "DEM.tif",
                  clip_geom, clip_crs, target_crs,
-                 Resampling.bilinear, "DEM")
+                 Resampling.bilinear, "DEM",
+                 force=_force("dem"))
 
     # ── Clip BpS ───────────────────────────────────────────────────────
     if not bps_path.exists():
@@ -423,7 +465,8 @@ def prep_custom_basin(
     bps_dst = input_dir / "BpS.tif"
     _clip_raster(bps_path, bps_dst,
                  clip_geom, clip_crs, target_crs,
-                 Resampling.nearest, "BpS")
+                 Resampling.nearest, "BpS",
+                 force=_force("bps"))
 
     # Write QGIS symbology if lookup is available
     try:
@@ -457,14 +500,42 @@ def prep_custom_basin(
         else:
             _clip_raster(wtd_path, input_dir / "WTD.tif",
                          clip_geom, clip_crs, target_crs,
-                         Resampling.bilinear, "WTD")
+                         Resampling.bilinear, "WTD",
+                         force=_force("wtd"))
             has_wtd = True
+
+    # ── Clip AWC + SoilDepth (optional) ────────────────────────────────
+    has_awc = False
+    if awc_path is not None:
+        if not awc_path.exists():
+            _log(f"  WARNING: AWC raster not found: {awc_path} — skipping")
+        else:
+            _clip_raster(awc_path, input_dir / "AWC.tif",
+                         clip_geom, clip_crs, target_crs,
+                         Resampling.bilinear, "AWC",
+                         force=_force("soil"))
+            has_awc = True
+    has_soil_depth = False
+    if soil_depth_path is not None:
+        if not soil_depth_path.exists():
+            _log(f"  WARNING: SoilDepth raster not found: {soil_depth_path} "
+                 f"— skipping")
+        else:
+            _clip_raster(soil_depth_path, input_dir / "SoilDepth.tif",
+                         clip_geom, clip_crs, target_crs,
+                         Resampling.bilinear, "SoilDepth",
+                         force=_force("soil"))
+            has_soil_depth = True
 
     # ── Derive HAND ────────────────────────────────────────────────────
     if derive_hand:
         hand_dst = input_dir / "HAND.tif"
         dem_src = input_dir / "DEM.tif"
-        if not dem_src.exists():
+        if hand_dst.exists() and not _force("hand"):
+            size_mb = hand_dst.stat().st_size / 1e6
+            _log(f"  HAND.tif already present ({size_mb:.1f} MB) — "
+                 "skipping derivation (use --force or --force-hand to rebuild)")
+        elif not dem_src.exists():
             _log("  WARNING: DEM.tif missing — cannot derive HAND")
         else:
             try:
@@ -484,11 +555,38 @@ def prep_custom_basin(
     else:
         _log("  HAND derivation skipped (--skip-hand)")
 
+    # ── Derive REM (optional, opt-in) ──────────────────────────────────
+    if derive_rem:
+        rem_dst = input_dir / "REM.tif"
+        dem_src = input_dir / "DEM.tif"
+        if rem_dst.exists() and not _force("rem"):
+            size_mb = rem_dst.stat().st_size / 1e6
+            _log(f"  REM.tif already present ({size_mb:.1f} MB) — "
+                 "skipping derivation (use --force or --force-rem to rebuild)")
+        elif not dem_src.exists():
+            _log("  WARNING: DEM.tif missing — cannot derive REM")
+        else:
+            try:
+                _derive_rem_from_dem(
+                    dem_path=dem_src,
+                    dst_path=rem_dst,
+                    window_px=rem_window_px,
+                    percentile_q=rem_percentile_q,
+                )
+            except SystemExit as exc:
+                _log(f"  WARNING: REM derivation failed: {exc}")
+                if rem_dst.exists():
+                    try:
+                        rem_dst.unlink()
+                    except OSError:
+                        pass
+
     # ── Generate config.toml ───────────────────────────────────────────
     _generate_config(basin_dir, basin_key, boundary_name, has_wtd)
 
-    _log(f"\n  Done.  Place ETg and treatment files in:\n"
-         f"    {input_dir.resolve()}/\n"
+    _log(f"\n  Done.  Place raw ETg raster and treatment shapefile in:\n"
+         f"    {source_dir.resolve()}/\n"
+         f"  (Prep-generated covariates are in {input_dir.resolve()}/)\n"
          f"  Then run:\n"
          f"    python etg_baseline_fill.py {basin_key}")
     return True
@@ -510,6 +608,10 @@ def main():
                         help="BpS raster (any extent >= study area)")
     parser.add_argument("--wtd", type=Path, default=None,
                         help="WTD raster (optional)")
+    parser.add_argument("--awc", type=Path, default=None,
+                        help="gSSURGO AWC raster (optional)")
+    parser.add_argument("--soil-depth", type=Path, default=None,
+                        help="gSSURGO depth-to-restrictive-layer raster (optional)")
     parser.add_argument("--buffer-m", type=float, default=CLIP_BUFFER_M,
                         help=f"Buffer around boundary for clipping "
                              f"(default: {CLIP_BUFFER_M} m)")
@@ -521,7 +623,35 @@ def main():
                              f"(default: {HAND_STREAM_THRESHOLD_CELLS})")
     parser.add_argument("--keep-hand-intermediates", action="store_true",
                         help="Keep whitebox intermediate files")
+    parser.add_argument("--derive-rem", action="store_true",
+                        help="Derive a Relative Elevation Model (REM) from "
+                             "the DEM via a percentile filter (opt-in).")
+    parser.add_argument("--rem-window-px", type=int, default=REM_WINDOW_PX,
+                        help=f"REM percentile-filter window side in pixels "
+                             f"(default: {REM_WINDOW_PX}, ≈2 km at 30 m)")
+    parser.add_argument("--rem-percentile-q", type=float, default=REM_PERCENTILE_Q,
+                        help=f"REM percentile (0-100) used as valley-floor proxy "
+                             f"(default: {REM_PERCENTILE_Q})")
+    parser.add_argument("--force", action="store_true",
+                        help="Rebuild every covariate even if already present")
+    parser.add_argument("--force-dem",  action="store_true", help="Rebuild DEM.tif")
+    parser.add_argument("--force-bps",  action="store_true", help="Rebuild BpS.tif")
+    parser.add_argument("--force-wtd",  action="store_true", help="Rebuild WTD.tif")
+    parser.add_argument("--force-hand", action="store_true", help="Rebuild HAND.tif")
+    parser.add_argument("--force-soil", action="store_true",
+                        help="Rebuild AWC.tif / SoilDepth.tif")
+    parser.add_argument("--force-rem",  action="store_true", help="Rebuild REM.tif")
     args = parser.parse_args()
+
+    force_dict = {
+        "all":  bool(args.force),
+        "dem":  bool(args.force_dem),
+        "bps":  bool(args.force_bps),
+        "wtd":  bool(args.force_wtd),
+        "hand": bool(args.force_hand),
+        "soil": bool(args.force_soil),
+        "rem":  bool(args.force_rem),
+    }
 
     t0 = time.time()
     BASINS_DIR.mkdir(parents=True, exist_ok=True)
@@ -532,10 +662,16 @@ def main():
         dem_path=args.dem,
         bps_path=args.bps,
         wtd_path=args.wtd,
+        awc_path=args.awc,
+        soil_depth_path=args.soil_depth,
         buffer_m=args.buffer_m,
         derive_hand=not args.skip_hand,
         hand_threshold=args.hand_threshold,
         keep_hand_intermediates=args.keep_hand_intermediates,
+        derive_rem=args.derive_rem,
+        rem_window_px=args.rem_window_px,
+        rem_percentile_q=args.rem_percentile_q,
+        force=force_dict,
     )
 
     _log(f"\nElapsed: {time.time() - t0:.1f} s")
