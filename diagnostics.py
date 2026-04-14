@@ -50,18 +50,21 @@ def _read(path):
 
 
 def _load_cfg(study_area: str):
-    """Load basin_config (TOML) or legacy config depending on study area."""
+    """Load per-basin TOML config via basin_config.py."""
     global cfg
     basins_dir = _here / "basins"
     toml_path = basins_dir / study_area / "config.toml"
-    if toml_path.exists():
-        import basin_config as _cfg
-        _cfg.load_basin(study_area)
-        cfg = _cfg
-    else:
-        import config as _cfg
-        _cfg.load_study_area(study_area)
-        cfg = _cfg
+    if not toml_path.exists():
+        import basin_config as _bc
+        available = _bc.available_areas()
+        sys.exit(
+            f"ERROR: no config.toml found for '{study_area}' at {toml_path}.\n"
+            f"  Run prep_basin.py (or prep_custom_basin.py) first.\n"
+            f"  Available basins: {', '.join(available) if available else '(none)'}"
+        )
+    import basin_config as _cfg
+    _cfg.load_basin(study_area)
+    cfg = _cfg
 
 
 def main(study_area: str | None = None):
@@ -71,12 +74,10 @@ def main(study_area: str | None = None):
             study_area = sys.argv[1]
         else:
             import basin_config as _bc
-            import config as _legacy
-            all_areas = sorted(set(_bc.available_areas()) |
-                               set(_legacy.available_areas()))
+            available = _bc.available_areas()
             sys.exit(
                 f"Usage: python diagnostics.py <study_area>\n"
-                f"  Available: {', '.join(all_areas)}"
+                f"  Available: {', '.join(available) if available else '(none)'}"
             )
     _load_cfg(study_area)
     print(f"Study area: {cfg.STUDY_AREA_NAME}")

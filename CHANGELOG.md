@@ -7,6 +7,14 @@ All notable changes to this project are documented in this file.
 Prep resumability, first-class soil covariates, and opt-in REM.
 
 ### Added
+- **OpenTopography per-basin DEM download.**  New `opentopo.py` module
+  fetches Copernicus GLO-30 (COP30) for each basin's bbox via the public
+  OpenTopography API when no statewide DEM is available.  This bypasses
+  py3dep's memory issues on Nevada-scale AOIs and is now the default DEM
+  source for both `prep_basin.py` (fallback when `statewide/DEM_statewide.tif`
+  is missing) and `prep_custom_basin.py` (when `--dem` is omitted).  API key
+  is read from `$OPENTOPOGRAPHY_API_KEY` or a project default baked into
+  `opentopo.py`.  `--dem` is now optional on `prep_custom_basin.py`.
 - **Skip-if-exists prep behaviour.**  `prep_basin.py` and
   `prep_custom_basin.py` now skip any covariate raster that already
   exists in `basins/<key>/input/`.  Pre-populating `input/` with files
@@ -35,7 +43,28 @@ Prep resumability, first-class soil covariates, and opt-in REM.
 - **`use_soil` persisted in run metadata.**  The run metadata file now
   also records `use_rem` and `rem_tif`.
 
+### Added
+- **External per-basin `config.toml` template** at
+  `basins/_template/config.toml`.  Both `prep_basin.py` and
+  `prep_custom_basin.py` now render new basins' configs from this single
+  file via `basin_config.render_config_template()` (uses Python
+  `string.Template` with `$name` placeholders).  To change defaults for
+  future basins — new flags, tweaked values, updated comments — edit
+  the template; no Python changes required.  Existing basins' configs
+  are still never overwritten.  The `_template` directory is skipped
+  by `basin_config.available_areas()` so it never appears as a runnable
+  basin.
+
 ### Removed
+- **`config.py` (legacy dict-based config) deleted.**  All three scripts
+  (`etg_baseline_fill.py`, `diagnostics.py`, `etunit_summary.py`) now load
+  their configuration exclusively from `basins/<key>/config.toml` via
+  `basin_config.py`.  The legacy fallback was unreachable in practice
+  (both hard-coded areas had already migrated to TOML) and had fallen
+  behind on new flags (`use_soil`, `use_rem`, soil/REM paths,
+  `boundary_shp`, `spatial_fallback_radius_px`).  If a basin has no
+  `config.toml`, the scripts now exit with an actionable error pointing
+  to `prep_basin.py` / `prep_custom_basin.py`.
 - **`etg_raw_tif` field.**  The two-file workflow (burned `etg_tif` + a
   separate unmodified `etg_raw_tif`) has been retired.  Every script now
   reads only `etg_tif`.  Remove the `etg_raw_tif` line from existing

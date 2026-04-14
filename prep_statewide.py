@@ -104,7 +104,26 @@ def _clip_raster_to_geometry(
     target CRS (by default the NWI shapefile CRS).  Writes a GeoTIFF with
     DEFLATE compression.
     """
+    # Safety guard: never overwrite a user-supplied source raster.  If the
+    # caller accidentally passes the same path for src and dst (e.g. points
+    # --dem directly at statewide/DEM_statewide.tif), abort before opening
+    # the destination for writing.
+    try:
+        src_resolved = Path(src_path).resolve()
+        dst_resolved = Path(dst_path).resolve()
+    except Exception:
+        src_resolved = Path(src_path)
+        dst_resolved = Path(dst_path)
+    if src_resolved == dst_resolved:
+        sys.exit(
+            f"ERROR: refusing to overwrite source raster in place.\n"
+            f"  source: {src_path}\n"
+            f"  destination: {dst_path}\n"
+            f"  Supply a source path outside the project's statewide/ folder."
+        )
     _log(f"  Clipping {label or src_path.name} …")
+    _log(f"    source:      {src_resolved}")
+    _log(f"    destination: {dst_resolved}")
 
     with rasterio.open(src_path) as src:
         # Reproject clip geometry to raster CRS for the mask step

@@ -27,8 +27,8 @@ Usage
 
 The output GeoTIFF is in the native CRS of the Ma 2025 dataset (EPSG:5070,
 NAD83 / Conus Albers).  The ETg baseline-fill workflow reprojects it
-automatically to match the ETg grid — just point WTD_TIF in config.py
-at the output file.
+automatically to match the ETg grid — just point wtd_tif in the basin's
+config.toml at the output file.
 
 Reference
 ---------

@@ -142,7 +142,8 @@ baseline-replaced values smoothly into the surrounding raw ETg landscape.
 ```
 project/
     statewide/                  Nevada-extent covariate rasters (one-time prep)
-        DEM_statewide.tif
+        DEM_statewide.tif       (optional; if missing, prep_basin.py pulls
+                                 per-basin COP30 from OpenTopography)
         BpS_statewide.tif
         WTD_statewide.tif
 
@@ -154,12 +155,16 @@ project/
             output/             Fill results, diagnostics, logs
         053_PineValley/
             ...
+        _template/
+            config.toml         # Template used by prep scripts to
+                                # generate each basin's config.toml.
+                                # Edit to change defaults for new basins.
 
     prep_statewide.py       One-time: clip CONUS rasters to NWI extent
     prep_basin.py           Per-basin: clip covariates + generate config.toml (NWI)
     prep_custom_basin.py    Set up a basin from any boundary shapefile (non-NWI)
     basin_config.py         TOML config reader (per-basin config interface)
-    config.py               Legacy config (SierraValley / PineValley only)
+    opentopo.py             OpenTopography COP30 downloader (per-basin DEM fallback)
     etg_baseline_fill.py    Main workflow (training, prediction, fill, feathering)
     diagnostics.py          Post-run plots and distribution summaries
     etunit_summary.py       ET-unit-level summary CSV (area, volume, rates)
@@ -190,18 +195,29 @@ If you already have a compatible environment, the key packages are: `numpy`,
 
 ### 2. Prepare statewide covariates (one time)
 
-Clip CONUS-wide DEM, BpS, and WTD rasters to the NWI investigation extent. If
-you omit `--dem`, the script downloads the USGS 3DEP 30-m DEM via `py3dep`.
+Clip CONUS-wide BpS and WTD rasters to the NWI investigation extent. You can
+optionally pass `--dem /path/to/CONUS_DEM.tif` to build a statewide DEM too
+(recommended if you already have a mosaicked COP30 / SRTM / 3DEP file on
+disk). If you omit `--dem`, **no** `DEM_statewide.tif` is built; instead
+`prep_basin.py` will download a per-basin COP30 tile from OpenTopography for
+each basin's bbox. The per-basin path avoids py3dep's memory issues on
+Nevada-scale AOIs.
 
 ```bash
 python prep_statewide.py \
     --bps  /path/to/LF2020_BPS_CONUS.tif \
     --wtd  /path/to/wtd_conus.tif
+    # optional: --dem /path/to/CONUS_DEM.tif
 ```
 
-This writes `DEM_statewide.tif`, `BpS_statewide.tif`, and `WTD_statewide.tif`
-to the `statewide/` directory, all reprojected to the NWI shapefile CRS
-(EPSG:32611).
+This writes `BpS_statewide.tif` and `WTD_statewide.tif` (plus
+`DEM_statewide.tif` if `--dem` was supplied) to the `statewide/` directory,
+all reprojected to the NWI shapefile CRS (EPSG:32611).
+
+**OpenTopography API key.** Per-basin COP30 downloads use the OpenTopography
+Global DEM API. A project-default key is embedded in `opentopo.py` for
+convenience; override it by setting the `OPENTOPOGRAPHY_API_KEY` environment
+variable. Get your own free key at https://portal.opentopography.org.
 
 HAND (Height Above Nearest Drainage) is derived *per-basin* during
 `prep_basin.py` rather than statewide. whitebox-tools' `ElevationAboveStream`

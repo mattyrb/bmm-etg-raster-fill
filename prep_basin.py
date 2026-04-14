@@ -213,111 +213,26 @@ def _generate_default_config(basin_dir: Path, basin_key: str,
     etg_tif = etg_candidates[0].name if etg_candidates else "# PLACE ETg RASTER HERE"
     treat_shp = treatment_shps[0].name if treatment_shps else "# PLACE TREATMENT SHP HERE"
 
-    toml_content = f"""\
-# ETg Baseline Fill -- Basin Configuration
-# Basin: {basin_key}
-# Generated automatically.  Edit freely -- this file is never overwritten.
-
-[basin]
-basin_key  = "{basin_key}"
-basin_id   = "{basin_id}"
-basin_name = "{basin_name}"
-
-[source]
-# User-supplied files -- filenames are relative to the source/ directory.
-# Drop your raw ETg raster(s) and treatment shapefile into source/ and
-# reference them here.  prep_basin.py does NOT copy or modify these.
-# The ETg raster:
-etg_tif       = "{etg_tif}"
-# Treatment polygons shapefile:
-treatment_shp = "{treat_shp}"
-# Optional basin boundary shapefile.  If omitted, the fill script tries
-# the statewide NWI shapefile.  Set for custom (non-NWI) study areas.
-# boundary_shp = "boundary.shp"
-
-[inputs]
-# Prep-generated covariates -- filenames are relative to the input/
-# directory.  prep_basin.py writes these by clipping from statewide/.
-dem_tif       = "DEM.tif"
-bps_tif       = "BpS.tif"
-wtd_tif       = "WTD.tif"
-hand_tif      = "HAND.tif"
-# gSSURGO soil covariates.  prep_basin.py clips these from
-# statewide/AWC_statewide.tif and statewide/SoilDepth_statewide.tif if
-# present (see prep_statewide.py --awc / --soil-depth).  If the
-# statewide sources were never built, the fill script silently skips
-# whichever covariate is missing.
-awc_tif         = "AWC.tif"
-soil_depth_tif  = "SoilDepth.tif"
-# Relative Elevation Model (optional).  Opt-in only -- derive it by
-# running prep_basin.py with --derive-rem or --force-rem, then flip
-# use_rem=true below.  See README for the percentile-filter definition.
-rem_tif         = "REM.tif"
-
-[treatment]
-# Buffer distance (meters) around treatment polygons.
-buffer_m         = 90.0
-# Gaussian feather width (pixels) outside the treatment boundary.
-feather_width_px = 4
-# Shapefile attribute names identifying treatment polygons.
-# A polygon is treated if either attribute is > 0.
-attr_scale       = "scale_fctr"
-attr_replace     = "rplc_rt"
-
-[adjustment]
-# Expert adjustment knob -- scale the modeled baseline up or down.
-# 1.0 = no change, 0.8 = reduce baseline 20%, 1.2 = increase 20%.
-# This is a basin-wide default; individual polygons can override it
-# via the "adj_fctr" column in the treatment shapefile.
-baseline_adjust    = 1.0
-# Name of the per-polygon override column in the treatment shapefile.
-# If a polygon has a value > 0 in this column, it overrides the
-# basin-wide default above.  Set to "" to disable per-polygon overrides.
-attr_adjust        = "adj_fctr"
-
-[model]
-# Include water table depth as a covariate? Set to false if the WTD product
-# is unreliable for this basin.
-use_wtd          = true
-# Include Height Above Nearest Drainage as a covariate?  HAND is derived
-# from the 3DEP DEM in prep_statewide.py and captures distance-to-drainage
-# in elevation units, which is informative for groundwater ET in
-# phreatophyte / playa-fringe systems.  Set to false to drop it.
-use_hand         = true
-# Include gSSURGO soil covariates (Available Water Capacity in the top
-# ~1 m + depth to restrictive layer)?  Each is loaded only if its raster
-# is present in input/ AND reprojects to at least one valid pixel.  Set
-# to false to drop both entirely regardless of file presence.
-use_soil         = true
-# Include Relative Elevation Model as a covariate?  REM captures height
-# above local valley floor via a percentile-filter of the DEM; it is
-# OFF by default.  To enable: run prep_basin.py --derive-rem to produce
-# input/REM.tif, then set use_rem = true.
-use_rem          = false
-# When the terrain residual model's CV R² is negative, the fill script
-# falls back to spatially weighted BpS class means instead of flat
-# basin-wide averages.  This radius (in pixels) controls the Gaussian
-# smoothing window.  At 30 m, 33 px ~ 1 km.  Set to 0 for flat means.
-spatial_fallback_radius_px = 33
-# "lgbm" (LightGBM, recommended) or "rf" (RandomForest)
-backend          = "lgbm"
-# Exclude training pixels on slopes steeper than this (degrees).
-# Set to 0 or remove to disable.
-max_slope_deg    = 5.0
-# Maximum training pixels (memory/speed cap). Set to 0 for no limit.
-max_train_pixels = 500000
-random_seed      = 42
-
-[crs_overrides]
-# If a covariate raster has a malformed or missing CRS, specify it here.
-# Key = raster filename stem (without extension), value = CRS string.
-# Example:
-# "WTD" = "+proj=lcc +lat_1=30 +lat_2=60 +lon_0=-97.0 +lat_0=40.0 +a=6370000.0 +b=6370000.0 +units=m +no_defs"
-"""
+    # Render the config.toml from basins/_template/config.toml.  To change
+    # defaults for new NWI basins, edit the template file — not this script.
+    import basin_config as _bc
+    toml_content = _bc.render_config_template({
+        "basin_key":         basin_key,
+        "basin_id":          basin_id,
+        "basin_name":        basin_name,
+        "etg_tif":           etg_tif,
+        "treatment_shp":     treat_shp,
+        # NWI basins fall back to the statewide NWI shapefile, so we leave
+        # the boundary_shp line commented out in the generated config.
+        "boundary_shp_line": '# boundary_shp = "boundary.shp"',
+        "wtd_tif":           "WTD.tif",
+        "use_wtd":           "true",
+    })
 
     with open(config_path, "w", encoding="utf-8") as f:
         f.write(toml_content)
-    _log(f"  → config.toml generated (review & edit before running fill)")
+    _log(f"  → config.toml generated from basins/_template/config.toml "
+         f"(review & edit before running fill)")
 
 
 def prep_one_basin(
@@ -381,10 +296,29 @@ def prep_one_basin(
         clip_geom = geom.buffer(BASIN_CLIP_BUFFER_M)
 
     # ── Clip covariates from statewide ──────────────────────────────────────
+    # DEM: prefer statewide/DEM_statewide.tif if present; otherwise fall
+    # back to a per-basin OpenTopography COP30 download.  This avoids the
+    # py3dep / statewide-DEM memory issue on Nevada-scale AOIs.
     _log("  Clipping DEM …")
-    _clip_from_statewide("DEM_statewide.tif", input_dir / "DEM.tif",
-                         clip_geom, clip_crs, Resampling.bilinear,
-                         force=_force("dem"))
+    dem_dst = input_dir / "DEM.tif"
+    statewide_dem = STATEWIDE_DIR / "DEM_statewide.tif"
+    if dem_dst.exists() and not _force("dem"):
+        size_mb = dem_dst.stat().st_size / 1e6
+        _log(f"    → {dem_dst.name} already present ({size_mb:.1f} MB) "
+             f"— skipping (pass --force-dem to rebuild)")
+    elif statewide_dem.exists():
+        _clip_from_statewide("DEM_statewide.tif", dem_dst,
+                             clip_geom, clip_crs, Resampling.bilinear,
+                             force=_force("dem"))
+    else:
+        _log(f"    (no statewide/DEM_statewide.tif — falling back to "
+             f"OpenTopography COP30)")
+        import opentopo
+        opentopo.download_dem(
+            clip_geom, clip_crs, dem_dst,
+            target_crs=clip_crs,
+            demtype="COP30",
+        )
 
     _log("  Clipping BpS …")
     bps_dst = input_dir / "BpS.tif"
@@ -565,11 +499,16 @@ def main():
 
     # Check statewide rasters exist.  HAND is derived per-basin from the
     # basin's clipped DEM, so there's no HAND_statewide.tif to check.
-    for name in ("DEM_statewide.tif", "BpS_statewide.tif",
-                 "WTD_statewide.tif"):
+    # DEM is OPTIONAL at the statewide level -- prep_one_basin falls back
+    # to OpenTopography COP30 per-basin when statewide/DEM_statewide.tif
+    # is missing.  BpS and WTD must still be built statewide.
+    for name in ("BpS_statewide.tif", "WTD_statewide.tif"):
         p = STATEWIDE_DIR / name
         if not p.exists():
             _log(f"WARNING: {p} not found — run prep_statewide.py first")
+    if not (STATEWIDE_DIR / "DEM_statewide.tif").exists():
+        _log("NOTE: statewide/DEM_statewide.tif not found — DEM will be "
+             "downloaded per-basin from OpenTopography (COP30).")
 
     t0 = time.time()
     BASINS_DIR.mkdir(parents=True, exist_ok=True)

@@ -31,7 +31,8 @@ Usage
     python etg_baseline_fill.py SierraValley
     python etg_baseline_fill.py PineValley
 
-Configuration lives in config.py.  Study areas are defined there.
+Configuration lives in per-basin TOML files under basins/<key>/config.toml
+(loaded via basin_config.py).
 
 License: MIT (see LICENSE)
 """
@@ -69,8 +70,7 @@ except ImportError:
 # ── Config --------------------------------------------------------------------
 _here = Path(__file__).resolve().parent
 sys.path.insert(0, str(_here))
-# Flexible config: supports both legacy config.py (SierraValley/PineValley)
-# and new per-basin TOML configs via basin_config.py.
+# Config is loaded per-basin from basins/<key>/config.toml via basin_config.py.
 cfg = None  # set by _load_cfg() in main()
 
 
@@ -287,23 +287,23 @@ def _slope_from_dem(dem: np.ndarray, cellsize: float) -> np.ndarray:
 
 def _load_cfg(study_area: str):
     """
-    Load the right config module based on the study_area argument.
-
-    - If a ``basins/<study_area>/config.toml`` exists → use basin_config.py
-    - Otherwise fall back to the legacy config.py (SierraValley / PineValley)
+    Load the per-basin TOML config via basin_config.py.  Errors out if the
+    basin has no config.toml (run prep_basin.py or prep_custom_basin.py first).
     """
     global cfg
     basins_dir = _here / "basins"
     toml_path = basins_dir / study_area / "config.toml"
-
-    if toml_path.exists():
-        import basin_config as _cfg
-        _cfg.load_basin(study_area)
-        cfg = _cfg
-    else:
-        import config as _cfg
-        _cfg.load_study_area(study_area)
-        cfg = _cfg
+    if not toml_path.exists():
+        import basin_config as _bc
+        available = _bc.available_areas()
+        sys.exit(
+            f"ERROR: no config.toml found for '{study_area}' at {toml_path}.\n"
+            f"  Run prep_basin.py (or prep_custom_basin.py) first.\n"
+            f"  Available basins: {', '.join(available) if available else '(none)'}"
+        )
+    import basin_config as _cfg
+    _cfg.load_basin(study_area)
+    cfg = _cfg
 
 
 def main(study_area: str | None = None) -> None:
@@ -312,14 +312,11 @@ def main(study_area: str | None = None) -> None:
         if len(sys.argv) > 1:
             study_area = sys.argv[1]
         else:
-            # List available from both legacy and basin configs
             import basin_config as _bc
-            import config as _legacy
-            all_areas = sorted(set(_bc.available_areas()) |
-                               set(_legacy.available_areas()))
+            available = _bc.available_areas()
             sys.exit(
                 f"Usage: python etg_baseline_fill.py <study_area>\n"
-                f"  Available: {', '.join(all_areas)}"
+                f"  Available: {', '.join(available) if available else '(none)'}"
             )
     _load_cfg(study_area)
     _log(f"═══ Study area: {cfg.STUDY_AREA_NAME} ═══")
