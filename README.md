@@ -152,12 +152,12 @@ project/
         WTD_statewide.tif
 
     basins/                     Per-basin directories (257 NWI basins)
-        101_SierraValley/
+        053_PineValley/
             config.toml         Per-basin configuration (auto-generated, editable)
             source/             Raw ETg raster(s) + treatment shapefile (you drop these in)
             input/              Prep-generated clipped covariates (DEM, BpS, WTD, HAND, ...)
             output/             Fill results, diagnostics, logs
-        053_PineValley/
+        042_MarysRiverArea/
             ...
         _template/
             config.toml         # Template used by prep scripts to
@@ -239,13 +239,13 @@ correct HAND reference.
 python prep_basin.py --list
 
 # Prep a single basin (clips covariates, derives HAND, generates config.toml):
-python prep_basin.py 101_SierraValley
+python prep_basin.py 053_PineValley
 
 # Prep all basins at once:
 python prep_basin.py --all
 
 # Skip HAND derivation (e.g. for quick testing):
-python prep_basin.py 101_SierraValley --skip-hand
+python prep_basin.py 053_PineValley --skip-hand
 ```
 
 `prep_basin.py` writes `DEM.tif`, `BpS.tif`, `WTD.tif`, and `HAND.tif` to
@@ -286,9 +286,9 @@ and LightGBM/RandomForest hyperparameters.
 
 ```bash
 # Single basin:
-python etg_baseline_fill.py 101_SierraValley
-python diagnostics.py 101_SierraValley
-python etunit_summary.py 101_SierraValley
+python etg_baseline_fill.py 053_PineValley
+python diagnostics.py 053_PineValley
+python etunit_summary.py 053_PineValley
 
 # All configured basins (prep + fill + diagnostics + summary):
 python run_all.py
@@ -355,7 +355,7 @@ All downstream scripts (`etg_baseline_fill.py`, `diagnostics.py`,
 ## Outputs
 
 All output is written to `basins/<basin_key>/output/`. File names are prefixed
-with the basin key (e.g., `101_SierraValley_ETg_final.tif`).
+with the basin key (e.g., `053_PineValley_ETg_final.tif`).
 
 ### Rasters (GeoTIFF, DEFLATE-compressed, float32)
 

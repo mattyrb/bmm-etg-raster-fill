@@ -2,7 +2,7 @@
 
 This guide walks through the full workflow for a new basin, from environment
 setup through the initial run, reviewing output, and re-running with an
-expert adjustment. The example uses Railroad Valley, NV, but the process is
+expert adjustment. The example uses Pine Valley, NV, but the process is
 the same for any of the 257 NWI investigation basins.
 
 
@@ -51,7 +51,7 @@ https://portal.opentopography.org).
 ## 3. Find your basin key
 
 The NWI shapefile contains 257 hydrographic areas. Each has a basin key
-that combines the HA number and name (e.g. `173A_RailroadValleyNorth`).
+that combines the HA number and name (e.g. `053_PineValley`).
 List all available keys:
 
     python prep_basin.py --list
@@ -63,12 +63,12 @@ Find the key that matches your basin and note the exact string.
 
 Run the per-basin prep, substituting your basin key:
 
-    python prep_basin.py 173A_RailroadValleyNorth
+    python prep_basin.py 053_PineValley
 
 This creates the basin directory structure, clips covariates from the
 statewide subsets, and derives HAND from the basin's clipped DEM:
 
-    basins/173A_RailroadValleyNorth/
+    basins/053_PineValley/
         source/              (empty -- you drop your raws here)
         input/
             DEM.tif          (prep-generated)
@@ -89,8 +89,8 @@ a batch run, the basin continues without HAND rather than aborting.
 
 Optional flags for HAND control:
 
-    python prep_basin.py 173A_RailroadValleyNorth --skip-hand
-    python prep_basin.py 173A_RailroadValleyNorth --hand-threshold 500
+    python prep_basin.py 053_PineValley --skip-hand
+    python prep_basin.py 053_PineValley --hand-threshold 500
 
 
 ## 5. Place your data files
@@ -98,7 +98,7 @@ Optional flags for HAND control:
 Copy your ETg raster and treatment shapefile (including all sidecar files:
 `.shp`, `.shx`, `.dbf`, `.prj`, `.cpg`) into the `source/` folder:
 
-    basins/173A_RailroadValleyNorth/
+    basins/053_PineValley/
         source/
             your_ETg_raster.tif  (you provide this)
             your_treatment.shp   (you provide this)
@@ -120,7 +120,7 @@ the other prep outputs -- they're treated as covariates, not raws.
 
 ## 6. Review and edit config.toml
 
-Open `basins/173A_RailroadValleyNorth/config.toml` in a text editor. The
+Open `basins/053_PineValley/config.toml` in a text editor. The
 prep script tries to auto-detect your filenames, but verify the `[source]`
 section points to the correct files (paths resolve against `source/`):
 
@@ -152,7 +152,7 @@ Leave `baseline_adjust = 1.0` for your first run.
 
 ## 7. Run the fill
 
-    python etg_baseline_fill.py 173A_RailroadValleyNorth
+    python etg_baseline_fill.py 053_PineValley
 
 The script logs each step to the console and writes a detailed log file
 to `output/`. A typical run on a medium-sized basin takes 30-120 seconds
@@ -179,8 +179,8 @@ the run metadata records the fallback method used.
 
 ## 8. Run diagnostics and summary
 
-    python diagnostics.py 173A_RailroadValleyNorth
-    python etunit_summary.py 173A_RailroadValleyNorth
+    python diagnostics.py 053_PineValley
+    python etunit_summary.py 053_PineValley
 
 The fill-script log also prints two headline numbers before finishing:
 `Total ETg volume change vs original input` (basin-wide, over all pixels
@@ -189,7 +189,7 @@ to treatment pixels).  These quantify how much of the Landsat ETg signal
 was replaced by the modeled baseline — useful when the outputs feed into
 a basin water budget or a Net-ET decomposition (`ETa_applied = ETa − ETg`).
 
-All output lands in `basins/173A_RailroadValleyNorth/output/`. Key files
+All output lands in `basins/053_PineValley/output/`. Key files
 to review:
 
 - `*_ETg_final.tif` — the corrected ETg raster
@@ -209,7 +209,7 @@ viewer.
 
 ## 9. Review and identify issues
 
-Suppose you examine the polygon summary and see that polygon `RR_042`
+Suppose you examine the polygon summary and see that polygon `PV_042`
 has a modeled baseline of 0.15 ft/yr, but field data or professional
 judgment suggests the natural rate should be closer to 0.20 ft/yr. That
 is about 33% higher than the model predicted.
@@ -234,7 +234,7 @@ default of 1.0 (no change).
 
 Save the shapefile, then re-run:
 
-    python etg_baseline_fill.py 173A_RailroadValleyNorth
+    python etg_baseline_fill.py 053_PineValley
 
 
 ### Option B: Adjust the entire basin via config.toml
@@ -250,7 +250,7 @@ Edit `config.toml`:
 This multiplies the modeled baseline by 1.15 for every treatment
 polygon in the basin (a 15% increase). Re-run:
 
-    python etg_baseline_fill.py 173A_RailroadValleyNorth
+    python etg_baseline_fill.py 053_PineValley
 
 
 ### Combining both approaches
@@ -261,8 +261,8 @@ individual polygons via the `adj_fctr` column. Where a polygon has
 basin-wide default.
 
 For example, with `baseline_adjust = 1.1` in the config and
-`adj_fctr = 1.33` on polygon `RR_042`, most polygons get a 10% boost
-while `RR_042` gets 33%.
+`adj_fctr = 1.33` on polygon `PV_042`, most polygons get a 10% boost
+while `PV_042` gets 33%.
 
 
 ## 10. Verify the adjustment
