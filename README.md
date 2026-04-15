@@ -1,12 +1,5 @@
 # bmm-etg-raster-fill
 
-Data-driven estimation of counterfactual groundwater evapotranspiration (ETg) for
-irrigated and augmented areas in closed-basin groundwater budgets.
-
-The resulting ETg product refines basin water budgets and supports decomposition
-of Landsat-derived total ET into its natural and applied-water components
-(`ETa_applied = ETa_total − ETg`).
-
 This tool replaces the previous manual approach of burning uniform ETg replacement
 rates or scale factors into 30-meter Landsat-derived ETg rasters. Instead, it builds
 a statistical model of what ETg *would* look like in irrigated areas if the
