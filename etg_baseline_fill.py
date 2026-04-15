@@ -309,15 +309,9 @@ def _load_cfg(study_area: str):
 def main(study_area: str | None = None) -> None:
     # ── Resolve study area ──────────────────────────────────────────────────
     if study_area is None:
-        if len(sys.argv) > 1:
-            study_area = sys.argv[1]
-        else:
-            import basin_config as _bc
-            available = _bc.available_areas()
-            sys.exit(
-                f"Usage: python etg_baseline_fill.py <study_area>\n"
-                f"  Available: {', '.join(available) if available else '(none)'}"
-            )
+        # Fall through to CLI parser for argv-style invocation.
+        _cli()
+        return
     _load_cfg(study_area)
     _log(f"═══ Study area: {cfg.STUDY_AREA_NAME} ═══")
 
@@ -1419,5 +1413,126 @@ def main(study_area: str | None = None) -> None:
     _log("Done.  Outputs in:  " + str(out_dir.resolve()))
 
 
+def _cli() -> None:
+    """Argparse-driven entry point. Supports single-basin or batch runs."""
+    import argparse
+    import basin_config as _bc
+
+    ap = argparse.ArgumentParser(
+        prog="etg_baseline_fill.py",
+        description="Fill treatment-zone ETg with a data-driven natural baseline.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  python etg_baseline_fill.py 053_PineValley\n"
+            "  python etg_baseline_fill.py --all\n"
+            "  python etg_baseline_fill.py --all --skip 053_PineValley 131_BuffaloValley\n"
+            "  python etg_baseline_fill.py --only 042_MarysRiverArea 073A_LovelockValley\n"
+            "  python etg_baseline_fill.py --list\n"
+        ),
+    )
+    ap.add_argument("study_area", nargs="?",
+                    help="Basin key to process (e.g. 053_PineValley).")
+    ap.add_argument("--all", action="store_true",
+                    help="Process every basin that has a config.toml.")
+    ap.add_argument("--only", nargs="+", metavar="KEY",
+                    help="Process only these basin keys (mutually exclusive with --all).")
+    ap.add_argument("--skip", nargs="+", metavar="KEY", default=[],
+                    help="When used with --all, skip these basin keys.")
+    ap.add_argument("--list", action="store_true",
+                    help="List available basins and exit.")
+    ap.add_argument("--stop-on-error", action="store_true",
+                    help="Abort the batch on the first failure (default: continue).")
+    args = ap.parse_args()
+
+    available = _bc.available_areas()
+
+    if args.list:
+        if not available:
+            print("(no basins have a config.toml yet)")
+        else:
+            print(f"{len(available)} basin(s) with config.toml:")
+            for k in available:
+                print(f"  {k}")
+        return
+
+    # Resolve which basins to run
+    if args.all and args.only:
+        ap.error("--all and --only are mutually exclusive")
+    if args.all:
+        targets = [k for k in available if k not in set(args.skip)]
+        if not targets:
+            sys.exit("No basins to run (after applying --skip).")
+    elif args.only:
+        missing = [k for k in args.only if k not in available]
+        if missing:
+            sys.exit(
+                f"Basin(s) not found (no config.toml): {', '.join(missing)}\n"
+                f"  Available: {', '.join(available) if available else '(none)'}"
+            )
+        targets = list(args.only)
+    elif args.study_area:
+        if args.study_area not in available:
+            sys.exit(
+                f"Basin '{args.study_area}' not found (no config.toml).\n"
+                f"  Available: {', '.join(available) if available else '(none)'}"
+            )
+        targets = [args.study_area]
+    else:
+        ap.print_help()
+        sys.exit(
+            f"\nERROR: supply <study_area>, --all, --only, or --list.\n"
+            f"Available basins: {', '.join(available) if available else '(none)'}"
+        )
+
+    # Single-basin: run directly so exceptions surface the usual way.
+    if len(targets) == 1:
+        main(targets[0])
+        return
+
+    # Batch run
+    print(f"\n═══ BATCH: {len(targets)} basin(s) ═══")
+    for i, k in enumerate(targets, 1):
+        print(f"  [{i:3d}/{len(targets)}] {k}")
+    print()
+
+    batch_t0 = time.time()
+    ok, failed = [], []
+    for i, key in enumerate(targets, 1):
+        print(f"\n{'=' * 60}")
+        print(f"[{i}/{len(targets)}]  {key}")
+        print("=" * 60)
+        try:
+            main(key)
+            ok.append(key)
+        except SystemExit as e:
+            # _load_cfg and similar use sys.exit on missing data; treat as failure.
+            msg = str(e) if e.code not in (None, 0) else "SystemExit"
+            failed.append((key, msg))
+            print(f"\n⚠ {key} aborted: {msg}")
+            if args.stop_on_error:
+                break
+        except Exception as e:  # pragma: no cover — defensive
+            failed.append((key, f"{type(e).__name__}: {e}"))
+            print(f"\n⚠ {key} failed: {type(e).__name__}: {e}")
+            if args.stop_on_error:
+                raise
+
+    # Summary
+    elapsed = time.time() - batch_t0
+    print(f"\n{'=' * 60}")
+    print(f"Batch complete in {elapsed/60:.1f} min")
+    print(f"  succeeded: {len(ok)}")
+    print(f"  failed:    {len(failed)}")
+    if failed:
+        print("\nFailures:")
+        for k, msg in failed:
+            print(f"  • {k}: {msg}")
+    print("=" * 60)
+
+    if failed and not ok:
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    main()
+    _cli()
