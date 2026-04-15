@@ -250,6 +250,90 @@ def write_bps_symbology(bps_tif: Path, lut: BpsLookup) -> None:
     qml_path.write_text(qml_content, encoding="utf-8")
 
 
+def embed_bps_colortable_and_rat(bps_tif: Path, lut: BpsLookup) -> bool:
+    """
+    Embed a GDAL color table and Raster Attribute Table into a clipped
+    BpS GeoTIFF so it auto-renders in QGIS/ArcGIS with LANDFIRE class
+    names and colours — exactly like the original CONUS source.
+
+    rasterio's ``profile`` copy does NOT carry the color table or RAT
+    across when a raster is clipped/reprojected, so we re-attach them
+    here using GDAL directly.
+
+    Only codes actually present in the raster are included in the RAT
+    (keeps the attribute table compact).  The color table is attached
+    for every code in ``lut`` (the extras are harmless).
+
+    Returns True on success, False if GDAL isn't available or the
+    raster dtype isn't integer (paletted rendering requires an integer
+    band).
+    """
+    if not lut or not bps_tif.exists():
+        return False
+
+    try:
+        from osgeo import gdal
+    except Exception:
+        return False
+
+    ds = gdal.Open(str(bps_tif), gdal.GA_Update)
+    if ds is None:
+        return False
+    band = ds.GetRasterBand(1)
+
+    # Paletted rendering requires an integer band.  If the clip produced
+    # a float raster (shouldn't happen with Resampling.nearest but just
+    # in case), bail out — the .qml sidecar is the best we can do.
+    dt = gdal.GetDataTypeName(band.DataType)
+    if dt not in ("Byte", "UInt16", "Int16", "UInt32", "Int32"):
+        ds = None
+        return False
+
+    # ── Color table ────────────────────────────────────────────────────
+    ct = gdal.ColorTable()
+    # Start with a neutral default (prevents uninitialised entries from
+    # showing up black).
+    for i in range(256 if dt == "Byte" else 0, 0):
+        ct.SetColorEntry(i, (0, 0, 0, 0))
+    for code, (r, g, b, _name) in lut.items():
+        if 0 <= int(code) <= 65535:
+            ct.SetColorEntry(int(code), (int(r), int(g), int(b), 255))
+    band.SetColorTable(ct)
+    band.SetColorInterpretation(gdal.GCI_PaletteIndex)
+
+    # ── Raster Attribute Table (RAT) ───────────────────────────────────
+    # Determine which codes are actually present so the RAT stays small.
+    import numpy as _np
+    arr = band.ReadAsArray()
+    present = sorted(int(c) for c in _np.unique(arr) if int(c) != 0)
+
+    rat = gdal.RasterAttributeTable()
+    rat.CreateColumn("VALUE",    gdal.GFT_Integer, gdal.GFU_MinMax)
+    rat.CreateColumn("R",        gdal.GFT_Integer, gdal.GFU_Red)
+    rat.CreateColumn("G",        gdal.GFT_Integer, gdal.GFU_Green)
+    rat.CreateColumn("B",        gdal.GFT_Integer, gdal.GFU_Blue)
+    rat.CreateColumn("BPS_NAME", gdal.GFT_String,  gdal.GFU_Name)
+
+    rat.SetRowCount(len(present))
+    for i, code in enumerate(present):
+        if code in lut:
+            r, g, b, name = lut[code]
+        else:
+            r, g, b, name = 180, 180, 180, f"BpS {code}"
+        rat.SetValueAsInt(i, 0, int(code))
+        rat.SetValueAsInt(i, 1, int(r))
+        rat.SetValueAsInt(i, 2, int(g))
+        rat.SetValueAsInt(i, 3, int(b))
+        rat.SetValueAsString(i, 4, str(name))
+
+    band.SetDefaultRAT(rat)
+
+    band.FlushCache()
+    ds.FlushCache()
+    ds = None
+    return True
+
+
 def bps_name(code: int, lut: Optional[BpsLookup] = None) -> str:
     """Return the human-readable class name for a BpS code, or 'BpS <code>'."""
     if lut is None:

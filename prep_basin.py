@@ -329,13 +329,26 @@ def prep_one_basin(
     # Write QGIS-compatible symbology sidecars (.clr + .qml) so the BpS
     # raster renders with LANDFIRE class names and colours in QGIS.
     try:
-        from bps_utils import load_bps_lookup, write_bps_symbology
+        from bps_utils import (
+            load_bps_lookup,
+            write_bps_symbology,
+            embed_bps_colortable_and_rat,
+        )
         bps_lut = load_bps_lookup()
         if bps_lut and bps_dst.exists():
+            # Embed GDAL color table + RAT inside the GeoTIFF so QGIS /
+            # ArcGIS auto-render it with LANDFIRE class names and colours
+            # (rasterio drops these during clip).
+            embedded = embed_bps_colortable_and_rat(bps_dst, bps_lut)
             write_bps_symbology(bps_dst, bps_lut)
-            _log("    → BpS.clr + BpS.qml (QGIS symbology)")
+            if embedded:
+                _log("    → BpS.tif color table + RAT embedded; "
+                     "BpS.clr + BpS.qml sidecars written")
+            else:
+                _log("    → BpS.clr + BpS.qml sidecars written "
+                     "(GDAL embed skipped — non-integer dtype or GDAL missing)")
     except Exception as e:
-        _log(f"    (BpS symbology sidecar skipped: {e})")
+        _log(f"    (BpS symbology skipped: {e})")
 
     _log("  Clipping WTD …")
     _clip_from_statewide("WTD_statewide.tif", input_dir / "WTD.tif",

@@ -435,12 +435,23 @@ def prep_custom_basin(
                  force=_force("bps"))
 
     # Write QGIS symbology if lookup is available
+    def _apply_bps_symbology(lut):
+        """Embed color table + RAT in the GeoTIFF and write sidecars."""
+        from bps_utils import write_bps_symbology, embed_bps_colortable_and_rat
+        embedded = embed_bps_colortable_and_rat(bps_dst, lut)
+        write_bps_symbology(bps_dst, lut)
+        if embedded:
+            _log("    → BpS.tif color table + RAT embedded; "
+                 "BpS.clr + BpS.qml sidecars written")
+        else:
+            _log("    → BpS.clr + BpS.qml sidecars written "
+                 "(GDAL embed skipped)")
+
     try:
-        from bps_utils import load_bps_lookup, write_bps_symbology
+        from bps_utils import load_bps_lookup
         bps_lut = load_bps_lookup()
         if bps_lut and bps_dst.exists():
-            write_bps_symbology(bps_dst, bps_lut)
-            _log("    → BpS.clr + BpS.qml (QGIS symbology)")
+            _apply_bps_symbology(bps_lut)
     except Exception as e:
         _log(f"    (BpS symbology skipped: {e})")
 
@@ -452,9 +463,7 @@ def prep_custom_basin(
             extract_bps_lookup(bps_path)
             bps_lut = _reload()
             if bps_lut and bps_dst.exists():
-                from bps_utils import write_bps_symbology as _ws
-                _ws(bps_dst, bps_lut)
-                _log("    → BpS.clr + BpS.qml")
+                _apply_bps_symbology(bps_lut)
     except Exception:
         pass
 

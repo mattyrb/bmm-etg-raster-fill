@@ -93,17 +93,10 @@ def _load_cfg(study_area: str):
 
 
 def main(study_area: str | None = None):
-    # ── Resolve study area ──────────────────────────────────────────────────
+    # When called with no argument, fall through to the CLI (supports
+    # --all / --only / --skip for batch processing).
     if study_area is None:
-        if len(sys.argv) > 1:
-            study_area = sys.argv[1]
-        else:
-            import basin_config as _bc
-            available = _bc.available_areas()
-            sys.exit(
-                f"Usage: python etunit_summary.py <study_area>\n"
-                f"  Available: {', '.join(available) if available else '(none)'}"
-            )
+        return _cli()
     _load_cfg(study_area)
     print(f"Study area: {cfg.STUDY_AREA_NAME}")
 
@@ -255,5 +248,102 @@ def main(study_area: str | None = None):
              f"{rate_str:>10s}  {lci_str:>8s}  {uci_str:>8s}")
 
 
+def _cli():
+    """Argparse-based CLI supporting single-basin and batch modes."""
+    import argparse
+    import basin_config as _bc
+
+    ap = argparse.ArgumentParser(
+        description="Produce an ET-unit-level summary CSV for one or "
+                    "more basins.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ap.add_argument("study_area", nargs="?",
+                    help="Basin key (e.g. 053_PineValley). Omit with "
+                         "--all or --only for batch mode.")
+    ap.add_argument("--all", action="store_true",
+                    help="Process every basin with a config.toml.")
+    ap.add_argument("--only", nargs="+", metavar="KEY",
+                    help="Process only these basin keys.")
+    ap.add_argument("--skip", nargs="+", metavar="KEY", default=[],
+                    help="With --all, skip these basin keys.")
+    ap.add_argument("--list", action="store_true",
+                    help="List available basins and exit.")
+    ap.add_argument("--stop-on-error", action="store_true",
+                    help="Abort the batch on the first failure "
+                         "(default: continue and report a summary).")
+    args = ap.parse_args()
+
+    available = _bc.available_areas()
+
+    if args.list:
+        if available:
+            print(f"{len(available)} basin(s) with config.toml:")
+            for k in available:
+                print(f"  {k}")
+        else:
+            print("(no basins with config.toml found)")
+        return 0
+
+    # Resolve the list of basins to process
+    if args.all and args.only:
+        sys.exit("ERROR: --all and --only are mutually exclusive.")
+    if args.all:
+        keys = [k for k in available if k not in set(args.skip)]
+    elif args.only:
+        keys = list(args.only)
+    elif args.study_area:
+        keys = [args.study_area]
+    else:
+        sys.exit(
+            f"Usage: python etunit_summary.py <study_area>\n"
+            f"       python etunit_summary.py --all [--skip KEY ...]\n"
+            f"       python etunit_summary.py --only KEY [KEY ...]\n"
+            f"  Available: {', '.join(available) if available else '(none)'}"
+        )
+
+    if not keys:
+        sys.exit("No basins to process.")
+
+    # Single basin — run directly and propagate any exit.
+    if len(keys) == 1:
+        main(keys[0])
+        return 0
+
+    # Batch mode: run each basin, collect failures, print summary.
+    print(f"Running etunit_summary on {len(keys)} basins …\n")
+    failures = []
+    for i, key in enumerate(keys, 1):
+        header = f"[{i}/{len(keys)}] {key}"
+        print("=" * len(header))
+        print(header)
+        print("=" * len(header))
+        try:
+            main(key)
+        except SystemExit as e:
+            # main() calls sys.exit() on missing inputs; treat as failure
+            msg = str(e) if e.code not in (0, None) else "exited"
+            print(f"  !! {key} failed: {msg}")
+            failures.append((key, msg))
+            if args.stop_on_error:
+                break
+        except Exception as e:
+            print(f"  !! {key} failed: {e.__class__.__name__}: {e}")
+            failures.append((key, f"{e.__class__.__name__}: {e}"))
+            if args.stop_on_error:
+                break
+        print()
+
+    print("=" * 60)
+    ok = len(keys) - len(failures)
+    print(f"Batch complete.  ok: {ok}   failed: {len(failures)}")
+    if failures:
+        print("Failures:")
+        for k, msg in failures:
+            print(f"  {k}: {msg}")
+        return 1 if ok == 0 else 0
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(_cli())
