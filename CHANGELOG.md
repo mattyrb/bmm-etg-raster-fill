@@ -7,6 +7,22 @@ All notable changes to this project are documented in this file.
 Prep resumability, first-class soil covariates, and opt-in REM.
 
 ### Added
+- **Honest "volume change vs original input" summary.**  The
+  `etg_baseline_fill.py` closing summary now compares the final raster
+  against the ORIGINAL ETg input (not the training-masked copy), so the
+  "Total ETg volume change" number reflects the true change rather than
+  an artifact of the treatment-zone NaN-masking.  A second line now
+  reports the treatment-zone-only change, which is the actionable number
+  for buy-back accounting.  Stats on "Treatment zones – original input"
+  replace the previous "(no valid pixels)" line.
+- **Quieter NWI boundary handling for custom basins.**  Custom basin keys
+  (those without an NWI-style `NNN_Name` numeric prefix) no longer trip
+  the "basin key not found in NWI shapefile" warning when no
+  `boundary_shp` is configured; instead a single informational line is
+  logged.  If the user *does* configure a `boundary_shp` in config.toml
+  but the file is missing, the warning is now loud and explicit.
+  `basin_config.py` exposes `BOUNDARY_SHP_CONFIGURED` and
+  `BOUNDARY_SHP_MISSING` to support this distinction.
 - **OpenTopography per-basin DEM download.**  New `opentopo.py` module
   fetches Copernicus GLO-30 (COP30) for each basin's bbox via the public
   OpenTopography API when no statewide DEM is available.  This bypasses

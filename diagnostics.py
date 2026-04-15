@@ -109,15 +109,31 @@ def main(study_area: str | None = None):
     base_treat  = etg_baseline[is_treat & np.isfinite(etg_baseline)]
 
     # ── 1. Histogram comparison ──────────────────────────────────────────────
+    # Y-axis is "% of group" — each histogram is normalized so its bars sum to
+    # 100%.  This lets us compare the shape of distributions whose pixel counts
+    # differ by orders of magnitude (basin floor ≫ treatment zones) on one plot.
+    # Group sizes (n) are annotated in the legend so magnitude context isn't lost.
     print("Plotting histograms …")
     fig, ax = plt.subplots(figsize=(9, 5))
     p99 = np.nanpercentile(etg_orig[np.isfinite(etg_orig)], 99)
     bins = np.linspace(0, p99, 80)
-    ax.hist(orig_out,    bins=bins, alpha=0.35, density=True, label="Outside treatment")
-    ax.hist(orig_treat,  bins=bins, alpha=0.35, density=True, label="Treatment zones – original")
-    ax.hist(final_treat, bins=bins, alpha=0.35, density=True, label="Treatment zones – filled")
+
+    def _pct_weights(arr):
+        # Each bar = (count / total) * 100, so the whole histogram sums to 100%.
+        n = len(arr)
+        return np.full(n, 100.0 / n) if n > 0 else np.empty(0)
+
+    ax.hist(orig_out,    bins=bins, alpha=0.35,
+            weights=_pct_weights(orig_out),
+            label=f"Outside treatment (n = {len(orig_out):,})")
+    ax.hist(orig_treat,  bins=bins, alpha=0.35,
+            weights=_pct_weights(orig_treat),
+            label=f"Treatment zones – original (n = {len(orig_treat):,})")
+    ax.hist(final_treat, bins=bins, alpha=0.35,
+            weights=_pct_weights(final_treat),
+            label=f"Treatment zones – filled (n = {len(final_treat):,})")
     ax.set_xlabel("ETg (ft/yr)")
-    ax.set_ylabel("Density")
+    ax.set_ylabel("% of group")
     ax.set_title("ETg distributions: outside vs treatment zones")
     ax.legend(fontsize=8)
     fig.tight_layout()

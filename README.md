@@ -3,6 +3,10 @@
 Data-driven estimation of counterfactual groundwater evapotranspiration (ETg) for
 irrigated and augmented areas in closed-basin groundwater budgets.
 
+The resulting ETg product refines basin water budgets and supports decomposition
+of Landsat-derived total ET into its natural and applied-water components
+(`ETa_applied = ETa_total − ETg`).
+
 This tool replaces the previous manual approach of burning uniform ETg replacement
 rates or scale factors into 30-meter Landsat-derived ETg rasters. Instead, it builds
 a statistical model of what ETg *would* look like in irrigated areas if the
@@ -427,9 +431,11 @@ CRS. Any polygon with `scale_fctr > 0` or `rplc_rt > 0` is classified as a
 treatment polygon. All treatment polygons are buffered outward (default 90 m) and
 rasterized into a single binary treatment-zone mask.
 
-All pixels inside the treatment zone are either NaN'd (if a raw ETg raster is
-available, the raw values are used for outside-treatment pixels) or excluded from
-training, since those values reflect irrigation and cannot be trusted.
+All pixels inside the treatment zone are excluded from training, since those
+values reflect irrigation and cannot be trusted. The original ETg values in
+these pixels are overwritten by the modeled baseline in the final output, with
+Gaussian feathering applied in a band *outside* the treatment boundary to
+smooth the transition into the surrounding (un-replaced) ETg landscape.
 
 ### Step 3: Align covariates to the ETg grid
 
@@ -444,8 +450,11 @@ Either covariate can be disabled per-basin by setting `use_wtd = false` or
 ### Step 4: Compute slope and basin boundary mask
 
 Slope in degrees is computed from the aligned DEM using Horn's 3x3
-finite-difference method. If the NWI shapefile is found, the basin polygon is
-rasterized to constrain training data to within-basin pixels only.
+finite-difference method. The basin boundary (either `boundary_shp` from the
+config, or the matching polygon from the NWI shapefile for NWI-formatted
+basin keys) is rasterized to constrain training data to within-basin pixels
+only. For custom basins without a configured boundary, all valid pixels are
+used.
 
 ### Step 5: Train the two-stage model
 
@@ -524,6 +533,13 @@ ETg to the final product.
 A per-polygon summary CSV is written with pixel counts, treatment status, and mean
 ETg values (input, baseline, final) for every polygon. Run metadata (configuration,
 training stats, feature importances, results) is saved alongside.
+
+The run log reports two volume-change numbers against the original input raster:
+a basin-wide `Total ETg volume change vs original input` (over all pixels valid
+in both rasters), and a `Treatment-zone ETg volume change` restricted to
+treatment pixels. Together these quantify how much of the ETg signal was
+replaced by the modeled baseline and how much of the basin-wide budget it
+represents.
 
 
 ## Known considerations

@@ -17,25 +17,35 @@ activate it:
 
 ## 2. Run statewide covariate prep (one time only)
 
-Before processing any basin you need Nevada-extent subsets of the three
+Before processing any basin you need Nevada-extent subsets of the
 covariate rasters. This step clips CONUS-scale rasters to the dissolved
-NWI boundary with a 10 km buffer:
+NWI boundary with a 10 km buffer.  `--dem` is optional:
 
     python prep_statewide.py \
         --bps /path/to/BpS_CONUS.tif \
-        --wtd /path/to/WTD_CONUS.tif \
-        --dem /path/to/DEM.tif
+        --wtd /path/to/WTD_CONUS.tif
+        # optional:
+        # --dem /path/to/DEM_CONUS.tif
 
-This produces three files in `statewide/`:
+This produces two (or three, if `--dem` was supplied) files in `statewide/`:
 
     statewide/
-        DEM_statewide.tif
         BpS_statewide.tif
         WTD_statewide.tif
+        DEM_statewide.tif   (only if --dem was supplied)
 
 You only run this once. Every per-basin prep clips from these statewide
 subsets rather than going back to the CONUS files. (HAND is derived
 per-basin from the clipped DEM during step 4, not at the statewide level.)
+
+**DEM handling.** If `DEM_statewide.tif` is not built, `prep_basin.py` and
+`prep_custom_basin.py` fall back to downloading a per-basin Copernicus
+GLO-30 (COP30) DEM tile directly from OpenTopography's Global DEM API.
+This avoids memory issues on Nevada-scale py3dep requests and keeps each
+basin's DEM independent.  A project-default API key is embedded in
+`opentopo.py`; override it by setting the `OPENTOPOGRAPHY_API_KEY`
+environment variable (free registration at
+https://portal.opentopography.org).
 
 
 ## 3. Find your basin key
@@ -172,6 +182,13 @@ the run metadata records the fallback method used.
     python diagnostics.py 173A_RailroadValleyNorth
     python etunit_summary.py 173A_RailroadValleyNorth
 
+The fill-script log also prints two headline numbers before finishing:
+`Total ETg volume change vs original input` (basin-wide, over all pixels
+valid in both rasters) and `Treatment-zone ETg volume change` (restricted
+to treatment pixels).  These quantify how much of the Landsat ETg signal
+was replaced by the modeled baseline — useful when the outputs feed into
+a basin water budget or a Net-ET decomposition (`ETa_applied = ETa − ETg`).
+
 All output lands in `basins/173A_RailroadValleyNorth/output/`. Key files
 to review:
 
@@ -301,9 +318,10 @@ Before running, gather these files:
        GeoPackage.  This defines the area that training pixels are drawn
        from.  It does not need to be in the same CRS as the rasters.
 
-    2. A DEM raster that covers (at least) the study area plus a few km
-       of buffer.  CONUS-wide sources like USGS 3DEP work, as does any
-       local DEM in GeoTIFF format.
+    2. (Optional) A DEM raster that covers (at least) the study area plus
+       a few km of buffer.  CONUS-wide sources like USGS 3DEP work, as
+       does any local DEM in GeoTIFF format.  If `--dem` is omitted,
+       prep_custom_basin.py downloads a COP30 tile from OpenTopography.
 
     3. A LANDFIRE BpS raster that covers the study area.  The CONUS-wide
        LF2020_BPS raster works, or a regional extract.
@@ -316,13 +334,15 @@ Before running, gather these files:
 
 ### Prep the basin
 
-Run the custom prep script with your boundary and covariate sources:
+Run the custom prep script with your boundary and covariate sources
+(`--dem` is optional; if omitted, a COP30 tile is pulled from
+OpenTopography):
 
     python prep_custom_basin.py SierraValley \
-        --boundary  E:\data\sierra_valley_boundary.shp \
-        --dem       E:\data\3DEP_CONUS_30m.tif \
-        --bps       E:\data\LF2020_BPS_CONUS.tif \
-        --wtd       E:\data\wtd_conus.tif
+        --boundary  "E:\data\sierra_valley_boundary.shp" \
+        --bps       "E:\data\LF2020_BPS_CONUS.tif" \
+        --wtd       "E:\data\wtd_conus.tif"
+        # optional: --dem "E:\data\3DEP_CONUS_30m.tif"
 
 This does the following in one pass:
 

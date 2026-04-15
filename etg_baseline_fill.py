@@ -611,7 +611,15 @@ def main(study_area: str | None = None) -> None:
     # define their own training mask without needing the NWI shapefile at all.
     basin_mask = None
     boundary_shp = getattr(cfg, "BOUNDARY_SHP", None)
+    boundary_configured = getattr(cfg, "BOUNDARY_SHP_CONFIGURED", False)
+    boundary_missing = getattr(cfg, "BOUNDARY_SHP_MISSING", False)
     nwi_path = _here / "NWI_Investigations_EPSG_32611.shp"
+
+    # If the user configured a boundary path but the file is missing, warn
+    # loudly — that's almost certainly a broken config, not intent.
+    if boundary_configured and boundary_missing:
+        _log(f"  4b · WARNING: boundary_shp configured but file missing — "
+             f"cannot build training mask; using all valid pixels")
 
     if boundary_shp is not None and Path(boundary_shp).exists():
         # ── Custom boundary from config.toml ──────────────────────────
@@ -637,37 +645,51 @@ def main(study_area: str | None = None) -> None:
 
     elif nwi_path.exists():
         # ── Fall back to NWI shapefile ────────────────────────────────
-        _log("  4b · Rasterizing basin boundary (NWI) for training mask …")
-        gdf_nwi = gpd.read_file(nwi_path)
+        # Custom (non-NWI) basins won't match the NWI shapefile by design.
+        # A basin_key without an NWI-style numeric prefix (e.g. "053_Pine…")
+        # is almost certainly a custom basin, so skip the NWI lookup
+        # quietly rather than emitting a scary "not found" warning.
         basin_key = cfg.STUDY_AREA_NAME
-        nwi_match = gdf_nwi[gdf_nwi["Basin"] == basin_key]
-        if len(nwi_match) == 0:
-            # Try matching on BasinName for legacy study areas
-            compare_key = (basin_key.split("_", 1)[-1]
-                           if "_" in basin_key else basin_key)
-            nwi_match = gdf_nwi[
-                gdf_nwi["BasinName"].str.replace(" ", "") == compare_key
-            ]
-        if len(nwi_match) > 0:
-            nwi_geom = nwi_match.iloc[0].geometry
-            if nwi_match.crs is not None and not nwi_match.crs.equals(etg_crs):
-                nwi_series = gpd.GeoSeries([nwi_geom], crs=nwi_match.crs)
-                nwi_geom = nwi_series.to_crs(etg_crs).iloc[0]
-            basin_mask = rasterize(
-                [(nwi_geom, 1)],
-                out_shape=grid_shape,
-                transform=grid_transform,
-                fill=0,
-                dtype=np.uint8,
-            ).astype(bool)
-            n_basin_px = int(basin_mask.sum())
-            _log(f"    basin boundary pixels: {n_basin_px:,}")
+        looks_like_nwi = (
+            "_" in basin_key
+            and basin_key.split("_", 1)[0].isdigit()
+        )
+        if not looks_like_nwi:
+            _log(f"  4b · Custom basin ({basin_key}) — no boundary_shp "
+                 f"configured and basin_key is not NWI-formatted; "
+                 f"training will use all valid pixels")
         else:
-            _log(f"    WARNING: basin key '{basin_key}' not found in NWI shapefile "
-                 f"— training will use all valid pixels")
+            _log("  4b · Rasterizing basin boundary (NWI) for training mask …")
+            gdf_nwi = gpd.read_file(nwi_path)
+            nwi_match = gdf_nwi[gdf_nwi["Basin"] == basin_key]
+            if len(nwi_match) == 0:
+                # Try matching on BasinName for legacy study areas
+                compare_key = (basin_key.split("_", 1)[-1]
+                               if "_" in basin_key else basin_key)
+                nwi_match = gdf_nwi[
+                    gdf_nwi["BasinName"].str.replace(" ", "") == compare_key
+                ]
+            if len(nwi_match) > 0:
+                nwi_geom = nwi_match.iloc[0].geometry
+                if nwi_match.crs is not None and not nwi_match.crs.equals(etg_crs):
+                    nwi_series = gpd.GeoSeries([nwi_geom], crs=nwi_match.crs)
+                    nwi_geom = nwi_series.to_crs(etg_crs).iloc[0]
+                basin_mask = rasterize(
+                    [(nwi_geom, 1)],
+                    out_shape=grid_shape,
+                    transform=grid_transform,
+                    fill=0,
+                    dtype=np.uint8,
+                ).astype(bool)
+                n_basin_px = int(basin_mask.sum())
+                _log(f"    basin boundary pixels: {n_basin_px:,}")
+            else:
+                _log(f"    WARNING: basin key '{basin_key}' is NWI-formatted "
+                     f"but not found in NWI shapefile — training will use "
+                     f"all valid pixels")
     else:
-        _log("    No basin boundary found (no boundary_shp in config, no NWI shapefile) "
-             "— training will use all valid pixels")
+        _log("    No basin boundary found (no boundary_shp in config, "
+             "no NWI shapefile) — training will use all valid pixels")
 
     # ── 5. Build training set (outside ALL treatment zones, within basin) ───
     _log("5 · Assembling training data …")
@@ -1365,15 +1387,33 @@ def main(study_area: str | None = None) -> None:
 
     treat_bool = treatment_zone.astype(bool)
     _stats(etg[~treat_bool],             "Outside treatment (training)")
-    _stats(etg_raw[treat_bool],          "Treatment zones – raw ETg")
+    # Report stats against the ORIGINAL input ETg raster (etg), not etg_raw.
+    # etg_raw has treatment pixels NaN-masked for training (see §2d), so
+    # using it here would print "(no valid pixels)" in treatment zones and
+    # also corrupt the volume-change denominator (treatment pixels would
+    # count as zero in the baseline).  etg preserves the original values.
+    _stats(etg[treat_bool],              "Treatment zones – original input")
     _stats(baseline[treat_bool],         "Treatment zones – model baseline")
     _stats(etg_final[treat_bool],        "Treatment zones – final")
 
-    # Total volume change vs raw input
-    raw_sum = np.nansum(etg_raw[np.isfinite(etg_raw)])
-    final_sum = np.nansum(etg_final[np.isfinite(etg_final)])
-    pct = 100 * (final_sum - raw_sum) / raw_sum if raw_sum > 0 else 0
-    _log(f"  Total ETg volume change vs raw: {pct:+.2f}%")
+    # Total volume change: compare final raster against the ORIGINAL input
+    # ETg raster over the same pixel set (pixels valid in both rasters).
+    # This gives the true "how much did we change the raw ETg?" number.
+    both_valid = np.isfinite(etg) & np.isfinite(etg_final)
+    orig_sum  = float(np.sum(etg[both_valid]))
+    final_sum = float(np.sum(etg_final[both_valid]))
+    pct = 100 * (final_sum - orig_sum) / orig_sum if orig_sum > 0 else 0
+    _log(f"  Total ETg volume change vs original input: {pct:+.2f}%  "
+         f"(over {int(both_valid.sum()):,} pixels valid in both rasters)")
+    # Also report the treatment-zone-only change, which is the actionable
+    # number for buy-back accounting.
+    tz = both_valid & treat_bool
+    if tz.any():
+        orig_tz  = float(np.sum(etg[tz]))
+        final_tz = float(np.sum(etg_final[tz]))
+        pct_tz = 100 * (final_tz - orig_tz) / orig_tz if orig_tz > 0 else 0
+        _log(f"  Treatment-zone ETg volume change:       {pct_tz:+.2f}%  "
+             f"(over {int(tz.sum()):,} treatment pixels)")
 
     _log(f"  Elapsed: {time.time() - t0:.1f} s")
     _log("Done.  Outputs in:  " + str(out_dir.resolve()))

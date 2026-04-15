@@ -177,13 +177,22 @@ def load_basin_from_toml(toml_path: Path) -> None:
     g["TREATMENT_SHP"] = _resolve(source, "treatment_shp", source_dir)
 
     # Basin boundary shapefile (optional — used for training mask).
-    # If not specified, the fill script falls back to NWI_Investigations.
+    # If not specified, the fill script falls back to NWI_Investigations
+    # (for NWI basins) or "use all valid pixels" (for custom basins).
+    # ``BOUNDARY_SHP_CONFIGURED`` distinguishes "user set the path but the
+    # file is missing" (real problem — warn loudly) from "not set at all"
+    # (normal for NWI basins; expected for custom basins that happen to
+    # have a missing boundary).
     boundary_val = source.get("boundary_shp", "")
     if boundary_val and not boundary_val.startswith("#"):
         bp = source_dir / boundary_val
         g["BOUNDARY_SHP"] = bp if bp.exists() else None
+        g["BOUNDARY_SHP_CONFIGURED"] = True
+        g["BOUNDARY_SHP_MISSING"] = not bp.exists()
     else:
         g["BOUNDARY_SHP"] = None
+        g["BOUNDARY_SHP_CONFIGURED"] = False
+        g["BOUNDARY_SHP_MISSING"] = False
 
     # ── Output directory ────────────────────────────────────────────────────
     g["OUT_DIR"] = basin_dir / "output"
