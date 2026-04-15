@@ -767,15 +767,39 @@ def main(study_area: str | None = None) -> None:
         def _bps_name(code, lut=None):
             return f"BpS {code}"
 
+    # Track within-class std alongside the mean so we can see whether each
+    # BpS class carries any residual signal at all.
+    bps_std_map: dict[int, float] = {}
+    bps_count_map: dict[int, int] = {}
+    for b in unique_bps:
+        vals = y_train[bps_flat == b]
+        bps_std_map[b] = float(np.nanstd(vals)) if vals.size else 0.0
+        bps_count_map[b] = int(vals.size)
+
     for b in sorted(bps_mean_map, key=lambda x: -bps_mean_map[x]):
-        n_px = int((bps_flat == b).sum())
         _log(f"      {_bps_name(b, _bps_lut):50s}  "
              f"code={b:<6d}  mean={bps_mean_map[b]:.4f} ft  "
-             f"n={n_px:,}")
+             f"std={bps_std_map[b]:.4f}  "
+             f"n={bps_count_map[b]:,}")
 
     bps_mean_train = np.array([bps_mean_map.get(b, 0.0) for b in bps_flat],
                               dtype=np.float32)
     residual_train = y_train - bps_mean_train
+
+    # ── Residual-target signal diagnostic ─────────────────────────────────
+    # Compare the std of the residual target to the std of the raw target.
+    # A small ratio means the BpS class mean already explains most of the
+    # variance, so there's little left for the terrain model to learn.
+    # Across a Huntington-style dataset (piecewise-constant per polygon),
+    # expect ratios well below 0.5; a negative CV R² in that regime is
+    # "no signal to fit" rather than "model failed to fit".
+    y_std        = float(np.nanstd(y_train))        if y_train.size else 0.0
+    resid_std    = float(np.nanstd(residual_train)) if residual_train.size else 0.0
+    resid_ratio  = (resid_std / y_std) if y_std > 0 else float("nan")
+    _log(f"    residual-target diagnostic: "
+         f"std(y)={y_std:.4f}  std(residual)={resid_std:.4f}  "
+         f"ratio={resid_ratio:.3f}   (ratio ≪ 1 ⇒ BpS mean already "
+         f"explains most variance)")
 
     # ── 5b. Train residual model on terrain features ───────────────────────
     # Build the feature stack dynamically.  Elevation + slope are always
@@ -1235,6 +1259,10 @@ def main(study_area: str | None = None) -> None:
         f"features              = {feature_names}",
         f"cv_r2_mean            = {cv.mean():.4f}",
         f"cv_r2_std             = {cv.std():.4f}",
+        f"y_std                 = {y_std:.4f}   # std of raw ETg target",
+        f"residual_std          = {resid_std:.4f}   # std after subtracting BpS class mean",
+        f"residual_signal_ratio = {resid_ratio:.4f}   # residual_std / y_std "
+        f"(ratio ≪ 1 ⇒ no signal for residual model)",
     ]
 
     # Feature importance
@@ -1246,12 +1274,12 @@ def main(study_area: str | None = None) -> None:
     # BpS class breakdown
     meta_lines.append("")
     meta_lines.append("[bps_class_means]")
-    meta_lines.append("# code  mean_ETg_ft  n_train_pixels  class_name")
+    meta_lines.append("# code  mean_ETg_ft  std_ETg_ft  n_train_pixels  class_name")
     for b in sorted(bps_mean_map, key=lambda x: -bps_mean_map[x]):
-        n_px = int((bps_flat == b).sum())
         meta_lines.append(
             f"{b:<8d} = {bps_mean_map[b]:.4f}  "
-            f"n={n_px:<8,d}  {_bps_name(b, _bps_lut)}"
+            f"std={bps_std_map[b]:.4f}  "
+            f"n={bps_count_map[b]:<8,d}  {_bps_name(b, _bps_lut)}"
         )
 
     meta_lines += [

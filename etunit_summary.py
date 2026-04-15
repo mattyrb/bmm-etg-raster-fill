@@ -130,12 +130,18 @@ def main(study_area: str | None = None):
     if not gdf.crs.equals(crs):
         gdf = gdf.to_crs(crs)
 
-    if "ET_unit" not in gdf.columns:
-        sys.exit("Shapefile is missing 'ET_unit' column.")
-
-    # Normalize casing so "meadow" and "Meadow" merge into one group.
-    # Title-case first, then apply the display-name mapping.
-    gdf["ET_unit"] = gdf["ET_unit"].str.strip().str.title()
+    # Some training datasets (e.g. Huntington 2022) don't carry an ET_unit
+    # column.  In that case, fall back to a single basin-wide group so the
+    # script still produces a usable summary CSV rather than aborting.
+    basin_only = "ET_unit" not in gdf.columns
+    if basin_only:
+        _log("  Shapefile has no 'ET_unit' column — producing basin-wide "
+             "summary only.")
+        gdf["ET_unit"] = "Basin Total"
+    else:
+        # Normalize casing so "meadow" and "Meadow" merge into one group.
+        # Title-case first, then apply the display-name mapping.
+        gdf["ET_unit"] = gdf["ET_unit"].str.strip().str.title()
 
     # ── 3. Rasterize each ET unit ────────────────────────────────────────────
     _log("Rasterizing ET units …")
@@ -202,21 +208,23 @@ def main(study_area: str | None = None):
         if label not in ET_UNIT_ORDER:
             rows.append(rec)
 
-    # Totals row
-    total_area = sum(r["Area (ac)"]             for r in rows)
-    total_vol  = sum(r["ETg Volume (acft)"]     for r in rows)
-    total_lci  = sum(r["ETg Volume Low (acft)"] for r in rows)
-    total_uci  = sum(r["ETg Volume High (acft)"] for r in rows)
-    rows.append({
-        "ET Unit":               "",
-        "Area (ac)":             total_area,
-        "ETg Volume (acft)":     total_vol,
-        "ETg Volume Low (acft)": total_lci,
-        "ETg Volume High (acft)": total_uci,
-        "ETg Rate (ft)":         "",
-        "ETg Rate Low (ft)":     "",
-        "ETg Rate High (ft)":     "",
-    })
+    # Totals row — skipped when there's no ET_unit breakdown, since the
+    # single "Basin Total" row already is the total.
+    if not basin_only:
+        total_area = sum(r["Area (ac)"]             for r in rows)
+        total_vol  = sum(r["ETg Volume (acft)"]     for r in rows)
+        total_lci  = sum(r["ETg Volume Low (acft)"] for r in rows)
+        total_uci  = sum(r["ETg Volume High (acft)"] for r in rows)
+        rows.append({
+            "ET Unit":               "",
+            "Area (ac)":             total_area,
+            "ETg Volume (acft)":     total_vol,
+            "ETg Volume Low (acft)": total_lci,
+            "ETg Volume High (acft)": total_uci,
+            "ETg Rate (ft)":         "",
+            "ETg Rate Low (ft)":     "",
+            "ETg Rate High (ft)":     "",
+        })
 
     # ── 5. Write CSV ─────────────────────────────────────────────────────────
     fieldnames = [
@@ -232,7 +240,10 @@ def main(study_area: str | None = None):
         writer.writerows(rows)
 
     _log(f"\nWrote {csv_path}")
-    _log(f"  {len(rows) - 1} ET units + 1 totals row")
+    if basin_only:
+        _log(f"  basin-wide summary (no ET_unit column in shapefile)")
+    else:
+        _log(f"  {len(rows) - 1} ET units + 1 totals row")
 
     # ── 6. Print comparison table ────────────────────────────────────────────
     _log("\n── Modeled ET Unit Summary ──────────────────────────────────────")
