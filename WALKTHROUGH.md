@@ -209,75 +209,189 @@ viewer.
 
 ## 9. Review and identify issues
 
-Suppose you examine the polygon summary and see that polygon `PV_042`
-has a modeled baseline of 0.15 ft/yr, but field data or professional
-judgment suggests the natural rate should be closer to 0.20 ft/yr. That
-is about 33% higher than the model predicted.
+After the first run, open the polygon summary in your editor or QGIS:
 
-You have two options for adjusting the results.
+    basins/053_PineValley/output/053_PineValley_polygon_summary.csv
+
+The columns to focus on are:
+
+| Column | Meaning |
+|--------|---------|
+| `polygon_id` | Identifier from the treatment shapefile |
+| `n_pixels` | Pixel count inside the polygon (30 m pixels, so 1,089 px ~ 1 km^2) |
+| `treatment` | `replaced` (treated and modeled) or `none` (left at raw ETg) |
+| `adj_factor` | Adjustment that was applied (blank if untreated, 1.0 if no override) |
+| `mean_input_ETg` | Raw Landsat-derived ETg, including irrigation signal |
+| `mean_baseline_ETg` | Model-predicted natural baseline (what replaces the irrigated value) |
+| `mean_final_ETg` | What lands in the final raster after feathering at edges |
+
+Compare `mean_baseline_ETg` against field knowledge or independent estimates
+for the vegetation class and water-table setting of each polygon. The
+diagnostic boxplots (`*_diag_bps_boxplots.png`) and scatter
+(`*_diag_scatter.png`) help you see the model's behaviour by BpS class
+and flag systematic over- or under-prediction.
+
+Common reasons a polygon's baseline may need an expert override:
+
+- Valley-bottom training bias: most native phreatophyte / meadow pixels
+  in the basin sit inside irrigated polygons, so the model trained on
+  hillslope analogs and under-predicts native ETg in the valley floor.
+- A BpS class with very few non-irrigated training pixels in the basin.
+- Local water-table information not captured in the WTD product
+  (e.g., a known perched aquifer).
+- Recent observed change that the long-term covariates don't reflect.
+
+If the whole basin reads systematically low or high, use the basin-wide
+knob in `config.toml`. If only a few polygons need correction, use the
+per-polygon column in the shapefile. The two approaches combine cleanly
+(see "Combining both approaches" below).
+
+Before re-running, copy the existing `output/` directory to
+`output/before_adjustment/` or similar so you can diff the two runs.
+The re-run overwrites in place.
 
 
 ### Option A: Adjust a single polygon via the shapefile
 
-This is the right approach when one or a few polygons need correction
-but the rest of the basin looks reasonable.
+Use this when one or a few polygons need correction but the rest of the
+basin looks reasonable.
 
-Open the treatment shapefile in QGIS or ArcGIS Pro. Add a new field
-called `adj_fctr` (type: double). For the polygon you want to adjust,
-enter the multiplicative factor. In this example, to push 0.15 up to
-roughly 0.20:
+Open the treatment shapefile (the one named in `[source] treatment_shp`
+in `config.toml`) in QGIS or ArcGIS Pro. Start an edit session.
 
-    adj_fctr = 1.33
+Add a new field if it does not already exist. The default column name
+is `adj_fctr`; you can rename it via `attr_adjust` in
+`config.toml [adjustment]` if you prefer.
 
-Leave all other polygons as 0 or NULL. They will use the basin-wide
-default of 1.0 (no change).
+    Field name: adj_fctr
+    Type:       Double / float
+    Width:      10
+    Precision:  4
 
-Save the shapefile, then re-run:
+For each polygon you want to adjust, enter the multiplicative factor
+that converts the modeled baseline to your target rate:
+
+    adj_fctr = target_baseline / modeled_baseline
+
+**Worked example (Pine Valley, polygon 22).** The first run produced:
+
+    polygon_id  n_pixels  mean_input_ETg  mean_baseline_ETg
+    22          812       1.654           0.624
+
+Suppose your field judgment for that part of the valley puts the
+native baseline closer to **0.85 ft/yr** based on meadow phreatophyte
+analogs and water-table depth. Then:
+
+    adj_fctr = 0.85 / 0.624 = 1.362
+
+Round to a sensible precision and enter `1.36` (or `1.37`) on polygon
+22. Leave every other polygon's `adj_fctr` as NULL or 0. Save the
+edits, exit the edit session, and re-run:
 
     python etg_baseline_fill.py 053_PineValley
+
+**Important rule about the column.** Only values **greater than 0**
+are treated as overrides. NULL, 0, and negative numbers all fall
+through to the basin-wide default. If you specifically want to force
+a polygon back to 1.0 when the basin default is non-1.0, you must
+enter `1.0` explicitly; a blank cell will inherit the basin default.
+
+The override is one factor per polygon. The value gets burned into
+every pixel inside the polygon. There is no sub-polygon variation.
 
 
 ### Option B: Adjust the entire basin via config.toml
 
-This is the right approach when the model systematically under- or
-over-predicts across the whole basin.
+Use this when the model systematically under- or over-predicts across
+the whole basin and the offset is roughly uniform.
 
-Edit `config.toml`:
+Open `basins/053_PineValley/config.toml`. If there is no
+`[adjustment]` section, add one. The minimal block:
 
     [adjustment]
     baseline_adjust = 1.15
+    # attr_adjust   = "adj_fctr"   # optional, only needed if you renamed the column
 
-This multiplies the modeled baseline by 1.15 for every treatment
-polygon in the basin (a 15% increase). Re-run:
+`baseline_adjust = 1.15` multiplies the modeled baseline by 1.15 for
+every treated polygon in the basin (a 15% increase). The default is
+`1.0` (no change). Values less than 1.0 reduce the baseline; values
+greater than 1.0 raise it. Re-run:
 
     python etg_baseline_fill.py 053_PineValley
 
 
 ### Combining both approaches
 
-You can set a basin-wide adjustment in `config.toml` and still override
-individual polygons via the `adj_fctr` column. Where a polygon has
-`adj_fctr > 0` in the shapefile, that value is used instead of the
-basin-wide default.
+The two paths stack cleanly. The fill script first rasterizes a basin
+default layer from `baseline_adjust`, then burns the per-polygon
+`adj_fctr` raster on top wherever the column value is greater than 0.
+Per-polygon values fully replace the basin default for that polygon's
+pixels (they are not multiplied).
 
-For example, with `baseline_adjust = 1.1` in the config and
-`adj_fctr = 1.33` on polygon `PV_042`, most polygons get a 10% boost
-while `PV_042` gets 33%.
+Example: `baseline_adjust = 1.10` in `config.toml`, and polygon 22
+has `adj_fctr = 1.36` in the shapefile. The result is:
+
+- Polygon 22: factor = 1.36 (override wins)
+- Every other treated polygon: factor = 1.10 (basin default)
+
+If you want polygon 22 to receive 1.36 *on top of* the 1.10 basin
+nudge, enter `1.10 * 1.36 = 1.496` in the shapefile directly. The
+script does not compose them automatically.
 
 
 ## 10. Verify the adjustment
 
-After re-running, check the log output. It will confirm the adjustment
-was applied:
+Three places to check, in order of speed.
 
-    expert adjustment ACTIVE — basin default: 1.15
-    per-polygon overrides applied to 342 pixels
-    adjustment factors in treatment zone — min: 1.150  max: 1.330  mean: 1.158
+**Run log.** When adjustment is active you will see lines like:
 
-The polygon summary CSV includes an `adj_factor` column so you can
-verify each polygon received the intended value. The run metadata file
-also records whether adjustments were active and whether per-polygon
-overrides were used.
+    2b · Rasterizing per-polygon adjustment factors (column 'adj_fctr') …
+        per-polygon overrides applied to 812 pixels
+        expert adjustment ACTIVE — basin default: 1.0
+        adjustment factors in treatment zone — min: 1.000  max: 1.360  mean: 1.028
+
+The pixel count should match the size of the polygons you flagged
+(in the worked example, polygon 22 had 812 pixels, and that is what
+the override pixel count should report). If the override count is 0,
+the column name does not match `attr_adjust` or every value was 0 /
+NULL / negative.
+
+**Polygon summary CSV.** The `adj_factor` column shows what each
+polygon actually received. For polygon 22, after the adjustment:
+
+    polygon_id  n_pixels  treatment  adj_factor  mean_input  mean_baseline  mean_final
+    22          812       replaced   1.36        1.654       0.624          ~0.849
+
+The `mean_baseline_ETg` value does not change (it is still the raw
+model prediction); the adjustment is applied downstream when the
+baseline is burned into the treatment pixels, so the effect shows up
+in `mean_final_ETg`.
+
+**Run metadata.** `output/053_PineValley_run_metadata.txt` records
+the basin-wide `baseline_adjust` value and whether per-polygon
+overrides were active. This is the file to point at in a project
+record of why the basin's output looks the way it does.
+
+For a visual confirmation, open `*_ETg_pct_change.tif` in QGIS and
+symbolize on a divergent ramp (e.g., blue for increases, red for
+decreases). The polygons you adjusted should pop out cleanly against
+the rest of the basin.
+
+
+### Document your reasoning
+
+A multiplicative override changes the output without leaving any
+record of *why*. For project archives and review, write a short note
+alongside the basin output directory describing each override:
+
+    basins/053_PineValley/output/ADJUSTMENT_NOTES.md
+
+    Polygon 22: model baseline 0.62 ft/yr; field judgment 0.85 ft/yr
+    based on meadow phreatophyte analogs and 1.5 m WTD; adj_fctr = 1.36.
+    Date: 2026-04-21. Reviewer: M. Bromley.
+
+This file is not read by any script, but it makes future audits much
+easier.
 
 
 ## Running multiple basins
